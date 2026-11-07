@@ -545,7 +545,12 @@ SQRL_API void square_send_mouse_move(square_instance* p, float x, float y) {
   inst->mouse_x = x;
   inst->mouse_y = y;
   inst->mouse_valid = true;
-  Node* hit = hit_test_page(inst, x, y);
+  if (square_scrollbar_hit((square_instance*)inst, (int)x)) {
+    /* over the scrollbar: no page hover */
+    if (g_hover_node) { g_hover_node = nullptr; inst->dirty = true; }
+    return;
+  }
+  Node* hit = hit_test_page(inst, x, y + inst->scroll_y); /* screen y -> page y */
   Node* effective = nullptr;
   for (Node* n = hit; n; n = n->parent)
     if (n->type == N_ELEMENT) { effective = n; break; }
@@ -662,7 +667,8 @@ SQRL_API int square_send_click(square_instance* p, float x, float y, int button)
   int nav_started = 0;
   {
     std::lock_guard<std::mutex> doclk(inst->doc_mtx);
-    Node* hit = hit_test_page(inst, x, y);
+    if (square_scrollbar_hit(p, (int)x)) return 0; /* over scrollbar, not page */
+    Node* hit = hit_test_page(inst, x, y + inst->scroll_y); /* screen y -> page y */
     Node* n = nullptr;
     for (Node* cur = hit; cur; cur = cur->parent) {
       if (cur->type == N_ELEMENT) { n = cur; break; }
@@ -740,6 +746,60 @@ int square_get_page_size(square_instance* p, int* out_w, int* out_h) {
   return inst->root_box ? 1 : 0;
 }
 
+/* repaint at a given scroll offset (shared by set_scroll and scrollbar drag) */
+static void apply_scroll(Instance* inst, int y) {
+  std::lock_guard<std::mutex> doclk(inst->doc_mtx);
+  int vh = inst->vh;
+  int scroll_max = inst->page_h - vh;
+  if (scroll_max < 0) scroll_max = 0;
+  inst->scroll_y = std::max(0, std::min(y, scroll_max));
+  std::lock_guard<std::mutex> plk(inst->paint_mtx);
+  if (!inst->latest.pix || !inst->doc || !inst->root_box) return;
+  paint_document(inst->doc, inst->root_box, &inst->latest, &inst->images, (float)inst->scroll_y);
+}
+
+/* returns 1 when viewport x is inside the page scrollbar */
+SQRL_API int square_scrollbar_hit(square_instance* p, int viewport_x) {
+  Instance* inst = as_inst(p);
+  if (!inst || !inst->doc || !inst->root_box) return 0;
+  float ty = 0, th = 0;
+  float w = scrollbar_metrics(inst->doc, (float)inst->vh, (float)inst->page_h,
+                              (float)inst->scroll_y, &ty, &th);
+  if (w <= 0) return 0;
+  return viewport_x >= (int)(inst->vw - w) ? 1 : 0;
+}
+
+/* scrollbar drag: place the thumb center at viewport_y; returns new scroll */
+SQRL_API int square_scrollbar_drag(square_instance* p, int viewport_y) {
+  Instance* inst = as_inst(p);
+  if (!inst || !inst->doc || !inst->root_box) return 0;
+  float ty = 0, th = 0;
+  float w = scrollbar_metrics(inst->doc, (float)inst->vh, (float)inst->page_h,
+                              (float)inst->scroll_y, &ty, &th);
+  if (w <= 0) return inst->scroll_y;
+  float track_h = (float)inst->vh;
+  float max_travel = track_h - th;
+  if (max_travel < 1) return inst->scroll_y;
+  float frac = ((float)viewport_y - th / 2) / max_travel;
+  if (frac < 0) frac = 0;
+  if (frac > 1) frac = 1;
+  int scroll_max = inst->page_h - inst->vh;
+  if (scroll_max < 0) scroll_max = 0;
+  apply_scroll(inst, (int)(frac * scroll_max));
+  return inst->scroll_y;
+}
+
+SQRL_API void square_set_scroll(square_instance* p, int y) {
+  Instance* inst = as_inst(p);
+  if (!inst) return;
+  apply_scroll(inst, y); /* repaint-only (no relayout) */
+}
+
+SQRL_API int square_get_scroll(square_instance* p) {
+  Instance* inst = as_inst(p);
+  return inst ? inst->scroll_y : 0;
+}
+
 int square_render_bgra(square_instance* p, uint8_t* dst, int dst_stride, int dst_h_px) {
   Instance* inst = as_inst(p);
   if (!inst || !dst) return 0;
@@ -773,7 +833,11 @@ int square_save_png(square_instance* p, const char* path, int full_page) {
   engine_log(1, "[save] root=%p kids=%zu h=%.0f page_h=%d", (void*)inst->root_box,
              inst->root_box ? inst->root_box->kids.size() : 0,
              inst->root_box ? inst->root_box->h : 0.f, inst->page_h);
-  paint_document(inst->doc, inst->root_box, &s, &inst->images);
+  /* honor the current scroll offset (clamped to the fresh layout) */
+  int scroll_max = inst->page_h - h;
+  if (scroll_max < 0) scroll_max = 0;
+  if (inst->scroll_y > scroll_max) inst->scroll_y = scroll_max;
+  paint_document(inst->doc, inst->root_box, &s, &inst->images, (float)inst->scroll_y);
   bool ok = gfx_write_png(path, s.pix, w, h, s.stride);
   s.free_pix();
   /* optional DOM/computed-style dump for diagnostics */

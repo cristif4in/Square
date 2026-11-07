@@ -78,6 +78,7 @@ struct Instance {
   std::atomic<bool> dirty{false}; /* DOM/style changed → relayout */
   std::atomic<int> loading{0};    /* pending resource fetches */
   int vw = 1280, vh = 800;
+  int scroll_y = 0;               /* current scroll offset (page coords) */
   std::string ua =
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
       "Chrome/131.0.0.0 Safari/537.36";

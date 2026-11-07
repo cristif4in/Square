@@ -37,7 +37,7 @@ static float res_l(const Length& L, float pct_basis, float em, LayoutCtx& lc) {
     case L_CH: return L.val;
     default: break;
   }
-  if (L.unit == L_CALC) {
+  if (L.unit == L_CALC || L.unit == L_CLAMP) {
     float sum = 0;
     for (int i = 0; i < L.ncalc; i++) {
       const CalcTerm& t = L.terms[i];
@@ -50,6 +50,25 @@ static float res_l(const Length& L, float pct_basis, float em, LayoutCtx& lc) {
         case L_VH: sum += t.val * lc.vh / 100.f * t.mul; break;
         default: sum += t.val * t.mul; break;
       }
+    }
+    if (L.has_clamp && L.unit == L_CLAMP) {
+      auto sum_terms = [&](const CalcTerm* ts, int n) {
+        float s2 = 0;
+        for (int i = 0; i < n; i++) {
+          switch ((LUnit)ts[i].unit) {
+            case L_PX: s2 += ts[i].val * ts[i].mul; break;
+            case L_PCT: s2 += ts[i].val * pct_basis / 100.f * ts[i].mul; break;
+            case L_EM: s2 += ts[i].val * em * ts[i].mul; break;
+            case L_REM: s2 += ts[i].val * lc.rem * ts[i].mul; break;
+            case L_VW: s2 += ts[i].val * lc.vw / 100.f * ts[i].mul; break;
+            case L_VH: s2 += ts[i].val * lc.vh / 100.f * ts[i].mul; break;
+            default: s2 += ts[i].val * ts[i].mul; break;
+          }
+        }
+        return s2;
+      };
+      if (L.nmin) { float mn = sum_terms(L.terms_min, L.nmin); if (sum < mn) sum = mn; }
+      if (L.nmax) { float mx = sum_terms(L.terms_max, L.nmax); if (sum > mx) sum = mx; }
     }
     return sum;
   }
@@ -699,6 +718,19 @@ static float measure_max_content_width(Node* el, LayoutCtx& lc) {
     }
   }
   float base = has_inline ? inline_total : max_child;
+  /* flex containers space their items with column-gap — max-content must
+   * include it or buttons shrink-wrap and their text wraps */
+  if (cs->display == D_FLEX || cs->display == D_INLINE_FLEX) {
+    int n_items = 0;
+    bool any_text = false;
+    for (Node* c : el->children) {
+      if (c->type == N_TEXT) { if (!c->data.empty()) any_text = true; }
+      else if (c->type == N_ELEMENT && !node_invisible(c->cs) &&
+               c->cs->position != P_ABSOLUTE && c->cs->position != P_FIXED) n_items++;
+    }
+    int gaps = n_items + (any_text ? 1 : 0) - 1;
+    if (gaps > 0) base += res_l(cs->gap_col, 0, cs->font_size, lc) * (float)gaps;
+  }
   if (is_blocky(cs->display) || is_atomic_inline(cs->display)) {
     base += res_l(cs->padding[3], 0, cs->font_size, lc) + res_l(cs->padding[1], 0, cs->font_size, lc);
     base += (cs->border_style[3] ? res_l(cs->border_width[3], 0, cs->font_size, lc) : 0) +
@@ -1589,22 +1621,12 @@ static float layout_element(Box* b, Node* el, LayoutCtx& lc) {
 }
 
 /* ============================ out of flow (absolute/fixed) ============================ */
-static void layout_out_of_flow_children(Box* b, Node* el, LayoutCtx& lc) {
-  std::vector<Node*> abs_kids;
-  for (Node* c : el->children) {
-    if (c->type == N_ELEMENT && c->cs &&
-        (c->cs->position == P_ABSOLUTE || c->cs->position == P_FIXED))
-      abs_kids.push_back(c);
-  }
-  if (abs_kids.empty()) return;
-  float cb_x = b->x + b->pad_l + b->bor_l;
-  float cb_y = b->y + b->pad_t + b->bor_t;
-  float cb_w = b->cw;
-  float cb_h = b->ch;
-  for (Node* c : abs_kids) {
-    ComputedStyle* ccs = c->cs;
+static void layout_out_of_flow_one(Box* b, Node* node, ComputedStyle* ccs, LayoutCtx& lc,
+                                   float cb_x, float cb_y, float cb_w, float cb_h) {
+  {
     float em = ccs->font_size;
-    Box* cb = new_box(c, b);
+    Box* cb = new_box(node, b);
+    cb->cs = ccs;
     b->out_of_flow.push_back(cb);
     /* resolve width */
     resolve_box_edges(cb, ccs, cb_w, lc);
@@ -1618,8 +1640,10 @@ static void layout_out_of_flow_children(Box* b, Node* el, LayoutCtx& lc) {
     } else if (has_left && has_right) {
       w = cb_w - res_l(ccs->left, cb_w, em, lc) - res_l(ccs->right, cb_w, em, lc);
     } else {
-      w = measure_max_content_width(c, lc);
-      w = std::min(w, cb_w);
+      if (node) {
+        w = measure_max_content_width(node, lc);
+        w = std::min(w, cb_w);
+      } else w = cb_w;
     }
     w += cb->pad_l + cb->pad_r + cb->bor_l + cb->bor_r;
     if (ccs->max_w.unit != L_AUTO && ccs->max_w.unit != L_NORMAL)
@@ -1640,7 +1664,15 @@ static void layout_out_of_flow_children(Box* b, Node* el, LayoutCtx& lc) {
         if (cb->ch_definite < 0) cb->ch_definite = 0;
       }
     }
-    float ch = layout_element(cb, c, lc);
+    float ch;
+    if (node) {
+      ch = layout_element(cb, node, lc);
+    } else {
+      /* pseudo-element box: no children, size comes from its own style */
+      cb->ch = 0;
+      ch = cb->pad_t + cb->pad_b + cb->bor_t + cb->bor_b;
+      cb->h = ch;
+    }
     if (predef_h > 0) {
       /* top+bottom both specified: the box stretches to the resolved height
        * (CSS: over-constrained abs positioning → height comes from offsets) */
@@ -1671,6 +1703,31 @@ static void layout_out_of_flow_children(Box* b, Node* el, LayoutCtx& lc) {
     }
     cb->x = x;
     cb->y = y;
+  }
+}
+
+static void layout_out_of_flow_children(Box* b, Node* el, LayoutCtx& lc) {
+  std::vector<Node*> abs_kids;
+  for (Node* c : el->children) {
+    if (c->type == N_ELEMENT && c->cs && !node_invisible(c->cs) &&
+        (c->cs->position == P_ABSOLUTE || c->cs->position == P_FIXED))
+      abs_kids.push_back(c);
+  }
+  float cb_x = b->x + b->pad_l + b->bor_l;
+  float cb_y = b->y + b->pad_t + b->bor_t;
+  float cb_w = b->cw;
+  float cb_h = b->ch;
+  for (Node* c : abs_kids) {
+    layout_out_of_flow_one(b, c, c->cs, lc, cb_x, cb_y, cb_w, cb_h);
+  }
+  /* absolutely-positioned ::before/::after pseudo elements (e.g. the
+   * animated sweep line inside buttons) become real out-of-flow boxes */
+  for (int pe = 0; pe < 2; pe++) {
+    ComputedStyle* pcs = el->pseudo[pe];
+    if (!pcs || pcs->display == D_NONE) continue;
+    if (pcs->position != P_ABSOLUTE && pcs->position != P_FIXED) continue;
+    if (!pcs->content_set) continue;
+    layout_out_of_flow_one(b, nullptr, pcs, lc, cb_x, cb_y, cb_w, cb_h);
   }
 }
 
@@ -1991,7 +2048,7 @@ static void paint_bg_layers(Box* b, PaintCtx& ctx, const Rect& pad_box, const fl
 
 static void paint_box(Box* b, PaintCtx& ctx) {
   ComputedStyle* cs = b->cs;
-  if (!cs) return;
+  if (!cs || cs->display == D_NONE) return;
   g_painted_boxes++;
   Surface& s = *ctx.s;
   LayoutCtx& lc = *ctx.lc;
@@ -2034,7 +2091,13 @@ static void paint_box(Box* b, PaintCtx& ctx) {
    * would flood bordered-but-transparent elements (Tailwind preflight sets
    * border-color on *). Different colors per side are respected. */
   bool any_border = b->bor_t > 0 || b->bor_r > 0 || b->bor_b > 0 || b->bor_l > 0;
-  if (any_border) {
+  if (any_border && has_radius) {
+    /* rounded box: paint the border as a ring — fill the full rounded box
+     * with the border color, the background fill below covers the inside */
+    Color ring = cs->border_color[0].a > 0 ? cs->border_color[0] : cs->border_color[3];
+    gfx_fill_rect(ts, {b->x, b->y, b->w, b->h}, ring, rad, &target.clip,
+                  target.rc.active ? &target.rc : nullptr);
+  } else if (any_border) {
     const RoundedClip* brc = target.rc.active ? &target.rc : nullptr;
     auto side_col = [&](int i) -> Color { return cs->border_color[i]; };
     if (b->bor_t > 0 && side_col(0).a > 0)
@@ -2212,7 +2275,46 @@ static void dump_box_tree(Box* b, int depth, int max_depth) {
   for (size_t i = 0; i < b->kids.size() && i < 8; i++) dump_box_tree(b->kids[i], depth + 1, max_depth);
 }
 
-void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images) {
+/* ============================ scrollbar ============================ */
+/* shared geometry: returns effective scrollbar width (0 = hidden); fills
+ * thumb position/height in track coords (track spans 0..viewport_h) */
+float scrollbar_metrics(const Document* doc, float viewport_h, float page_h,
+                        float scroll_y, float* thumb_y, float* thumb_h) {
+  if (page_h <= viewport_h + 1) return 0; /* not scrollable */
+  const ScrollbarStyle& sb = doc ? doc->sheet.sbstyle : ScrollbarStyle();
+  float w = sb.width;
+  if (w <= 0) return 0;
+  float track_h = viewport_h;
+  float th = std::max(30.f, track_h * viewport_h / page_h);
+  if (th > track_h) th = track_h;
+  float denom = page_h - viewport_h;
+  float frac = denom > 1 ? scroll_y / denom : 0;
+  frac = clampf(frac, 0.f, 1.f);
+  if (thumb_y) *thumb_y = frac * (track_h - th);
+  if (thumb_h) *thumb_h = th;
+  return w;
+}
+
+static void draw_scrollbar(Surface& s, const Document* doc, Box* root, float scroll_y) {
+  if (!root) return;
+  float page_h = layout_page_height(root);
+  float thumb_y = 0, thumb_h = 0;
+  float w = scrollbar_metrics(doc, (float)s.h, page_h, scroll_y, &thumb_y, &thumb_h);
+  if (w <= 0) return;
+  const ScrollbarStyle& sb = doc->sheet.sbstyle;
+  float x = s.w - w;
+  /* track */
+  gfx_fill_rect(s, {x, 0, w, (float)s.h}, sb.track, nullptr, nullptr, nullptr);
+  /* thumb */
+  float bor = sb.thumb_border;
+  Color tc = sb.thumb;
+  Rect th = {x + bor, thumb_y + bor, std::max(1.f, w - 2 * bor), std::max(1.f, thumb_h - 2 * bor)};
+  float rad[4] = {sb.radius, sb.radius, sb.radius, sb.radius};
+  gfx_fill_rect(s, th, tc, rad, nullptr, nullptr);
+}
+
+void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images,
+                    float scroll_y) {
   g_painted_boxes = g_painted_frags = g_painted_images = 0;
   if (getenv("SQRL_DUMP_TREE") && root) dump_box_tree(root, 0, 4);
   LayoutCtx lc;
@@ -2233,7 +2335,13 @@ void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images
   if (doc->html && doc->html->cs && doc->html->cs->bg_color.a > 0) canvas = doc->html->cs->bg_color;
   if (doc->body && doc->body->cs && doc->body->cs->bg_color.a > 0) canvas = doc->body->cs->bg_color;
   gfx_fill_rect(*s, {0, 0, (float)s->w, (float)s->h}, canvas, nullptr, nullptr, nullptr);
+  /* scroll: shift the (read-only) box tree up while painting, restore after.
+   * Boxes above the viewport are culled by the clip rect. */
+  bool shifted = root && scroll_y != 0;
+  if (shifted) offset_box_recursive(root, 0, -scroll_y);
   if (root) paint_box(root, ctx);
+  if (shifted) offset_box_recursive(root, 0, scroll_y);
+  draw_scrollbar(*s, doc, root, scroll_y);
 }
 
 } /* namespace sqrl */

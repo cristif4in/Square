@@ -51,13 +51,17 @@ struct RoundedClip {
 };
 
 /* length / units ------------------------------------------------------ */
-enum LUnit : uint8_t { L_AUTO = 0, L_PX, L_PCT, L_EM, L_REM, L_VW, L_VH, L_CH, L_FR, L_DEG, L_CALC, L_NORMAL };
+enum LUnit : uint8_t { L_AUTO = 0, L_PX, L_PCT, L_EM, L_REM, L_VW, L_VH, L_CH, L_FR, L_DEG, L_CALC, L_NORMAL, L_CLAMP };
 struct CalcTerm { float val = 0; uint8_t unit = L_PX; float mul = 1; };
 struct Length {
   LUnit unit = L_AUTO;
   float val = 0;                 /* px / percent / em factor / fr factor / deg */
   uint8_t ncalc = 0;             /* when unit==L_CALC: number of terms */
   CalcTerm terms[8];             /* flat sum: sum(term.val * mul) px+percent mixed */
+  uint8_t has_clamp = 0;         /* unit==L_CLAMP: base in terms[], bounds below */
+  uint8_t nmin = 0, nmax = 0;    /* clamp bounds as flat term lists (value type) */
+  CalcTerm terms_min[8];
+  CalcTerm terms_max[8];
   bool is_auto() const { return unit == L_AUTO; }
   bool is_none() const { return unit == L_NORMAL; }
 };
@@ -185,10 +189,29 @@ struct Rule {
   int order = 0;                 /* document order for tie-breaks */
 };
 
+/* scrollbar appearance (:::webkit-scrollbar-* / scrollbar-width / scrollbar-color) */
+struct ScrollbarStyle {
+  float width = 14;                    /* px; 0 = hidden */
+  Color track{255, 241, 241, 241};     /* field order: a,r,g,b */
+  Color thumb{255, 193, 193, 193};
+  Color thumb_hover{0, 0, 0, 0};       /* a==0 = not set (use thumb) */
+  float radius = 0;
+  float thumb_border = 0;
+  Color thumb_border_color{0, 0, 0, 0};
+};
+
+struct KeyframesRule {
+  std::string name;
+  std::vector<std::pair<float, std::vector<Declaration>>> steps; /* pct 0..100 */
+};
+
 struct StyleSheet {
   std::vector<Rule> rules;
   std::vector<FontFaceRule> fontfaces;
   std::vector<std::string> imports;   /* @import urls to fetch */
+  ScrollbarStyle sbstyle;             /* last scrollbar declaration wins */
+  std::vector<KeyframesRule> keyframes;
+  bool has_animations = false;
 };
 
 /* custom properties held per node */
@@ -303,6 +326,12 @@ struct ComputedStyle {
   float backdrop_blur_px = 0;
   std::string content;                   /* pseudo-elements */
   bool content_set = false;
+  /* animation (subset: name/duration/delay/timing/iterations) */
+  std::string anim_name;
+  std::string anim_timing = "linear";
+  float anim_duration = 0, anim_delay = 0;
+  bool anim_infinite = false;
+  int anim_iterations = 1;
   uint8_t list_style = 0;                /* 0 none, 1 disc */
   bool visibility_hidden = false;        /* visibility: hidden (subtree skipped) */
   /* resolution context */
@@ -536,7 +565,15 @@ float layout_page_height(Box* root);
 void free_box_tree(Box* b);
 void offset_box_recursive(Box* b, float dx, float dy);
 /* paint whole document into surface */
-void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images);
+void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images,
+                    float scroll_y = 0);
+/* scrollbar geometry shared by the painter and the drag API: returns the
+ * effective scrollbar width (0 = hidden/not scrollable); fills thumb_y /
+ * thumb_h (track coords, track spans 0..viewport_h) when the page scrolls */
+float scrollbar_metrics(const Document* doc, float viewport_h, float page_h,
+                        float scroll_y, float* thumb_y, float* thumb_h);
+/* color parsing for the scrollbar rules (defined in square_style.cpp) */
+bool parse_css_color(const std::string& raw, Color* out);
 void paint_debug_counts(int* boxes, int* frags, int* imgs);
 
 /* ============================ content module (square_content.cpp) ============================ */
