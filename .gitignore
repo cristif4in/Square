@@ -1,0 +1,15 @@
+# build outputs
+build/
+build-win/
+*.o
+*.obj
+*.dll
+*.exe
+*.so
+*.a
+*.lib
+*.def
+page.png
+
+# misc
+*.log
