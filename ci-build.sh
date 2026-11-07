@@ -17,20 +17,21 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) WINDOWS=1 ;;
   *) WINDOWS=0 ;;
 esac
+PIC=""; [ "$WINDOWS" = "0" ] && PIC="-fPIC"
 
 echo "[1/6] QuickJS (C)"
 for f in quickjs libregexp libunicode cutils dtoa; do
-  $CC -c -O2 -I$QJS -D_GNU_SOURCE -DCONFIG_VERSION="\"$QVER\"" $QJS/$f.c -o $OUT/qjs_$f.o &
+  $CC -c -O2 $PIC -I$QJS -D_GNU_SOURCE -DCONFIG_VERSION="\"$QVER\"" $QJS/$f.c -o $OUT/qjs_$f.o &
 done
 wait
 
 echo "[2/6] Embedded fonts"
-$CC -c -O2 thirdparty/fonts_embed.c -o $OUT/fonts_embed.o
+$CC -c -O2 $PIC thirdparty/fonts_embed.c -o $OUT/fonts_embed.o
 
 if [ "$WINDOWS" = "1" ]; then
   echo "[3/6] zlib (vendored)"
   for f in adler32 crc32 inflate inffast inftrees zutil deflate trees; do
-    $CC -c -O2 -I$ZLIB $ZLIB/$f.c -o $OUT/z/$f.o &
+    $CC -c -O2 $PIC -I$ZLIB $ZLIB/$f.c -o $OUT/z/$f.o &
   done
   wait
 else
@@ -46,7 +47,7 @@ for f in $WEBP/src/dec/*.c $WEBP/src/utils/*.c $WEBP/src/dsp/*.c; do
 done
 N=0
 for f in $WP_SRCS; do
-  $CC -c -O2 -I$WEBP -I$WEBP/src -Wno-unused-function -Wno-unused-variable -Wno-attributes -Wno-sign-compare $f -o $OUT/webp/$(basename $f .c).o &
+  $CC -c -O2 $PIC -I$WEBP -I$WEBP/src -Wno-unused-function -Wno-unused-variable -Wno-attributes -Wno-sign-compare $f -o $OUT/webp/$(basename $f .c).o &
   N=$((N+1)); if [ $((N % 16)) -eq 0 ]; then wait; fi
 done
 wait
