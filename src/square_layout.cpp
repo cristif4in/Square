@@ -37,7 +37,7 @@ static float res_l(const Length& L, float pct_basis, float em, LayoutCtx& lc) {
     case L_CH: return L.val;
     default: break;
   }
-  if (L.unit == L_CALC || L.unit == L_CLAMP) {
+  if (L.unit == L_CALC || L.unit == L_CLAMP || L.unit == L_MM) {
     float sum = 0;
     for (int i = 0; i < L.ncalc; i++) {
       const CalcTerm& t = L.terms[i];
@@ -50,6 +50,26 @@ static float res_l(const Length& L, float pct_basis, float em, LayoutCtx& lc) {
         case L_VH: sum += t.val * lc.vh / 100.f * t.mul; break;
         default: sum += t.val * t.mul; break;
       }
+    }
+    if (L.unit == L_MM && L.mm_op) {
+      auto sum_terms = [&](const CalcTerm* ts, int n) {
+        float s2 = 0;
+        for (int i = 0; i < n; i++) {
+          switch ((LUnit)ts[i].unit) {
+            case L_PX: s2 += ts[i].val * ts[i].mul; break;
+            case L_PCT: s2 += ts[i].val * pct_basis / 100.f * ts[i].mul; break;
+            case L_EM: s2 += ts[i].val * em * ts[i].mul; break;
+            case L_REM: s2 += ts[i].val * lc.rem * ts[i].mul; break;
+            case L_VW: s2 += ts[i].val * lc.vw / 100.f * ts[i].mul; break;
+            case L_VH: s2 += ts[i].val * lc.vh / 100.f * ts[i].mul; break;
+            default: s2 += ts[i].val * ts[i].mul; break;
+          }
+        }
+        return s2;
+      };
+      float r1 = sum_terms(L.terms_min, L.nmin);
+      float r2 = L.nmax ? sum_terms(L.terms_max, L.nmax) : r1;
+      return L.mm_op == 1 ? std::min(r1, r2) : std::max(r1, r2);
     }
     if (L.has_clamp && L.unit == L_CLAMP) {
       auto sum_terms = [&](const CalcTerm* ts, int n) {

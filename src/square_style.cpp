@@ -288,6 +288,22 @@ static bool parse_length(const std::string& raw, Length* out, const ResolveCtx& 
       return true;
     }
   }
+  if ((v.rfind("min(", 0) == 0 || v.rfind("max(", 0) == 0) && v.back() == ')') {
+    std::vector<std::string> parts;
+    split_top_commas(v.substr(4, v.size() - 5), &parts);
+    if (parts.size() >= 2) {
+      Length a, b;
+      parse_length(parts[0], &a, rc);
+      parse_length(parts[1], &b, rc);
+      *out = Length();
+      length_to_terms(a, out->terms_min, &out->nmin);   /* arg1 in terms_min */
+      length_to_terms(b, out->terms_max, &out->nmax);   /* arg2 in terms_max */
+      out->unit = L_MM;
+      out->mm_op = v.rfind("min(", 0) == 0 ? 1 : 2;
+      out->has_clamp = 0;
+      return true;
+    }
+  }
   if (v.rfind("calc(", 0) == 0) {
     return parse_calc(v.substr(5, v.size() - 6), out, rc);
   }
@@ -590,7 +606,7 @@ static float resolve_length(const Length& L, float pct_basis, float em, float re
     case L_CH: return L.val; /* pre-scaled */
     default: break;
   }
-  if (L.unit == L_CALC || L.unit == L_CLAMP) {
+  if (L.unit == L_CALC || L.unit == L_CLAMP || L.unit == L_MM) {
     float sum = 0;
     for (int i = 0; i < L.ncalc; i++) {
       const CalcTerm& t = L.terms[i];
@@ -603,6 +619,26 @@ static float resolve_length(const Length& L, float pct_basis, float em, float re
         case L_VH: sum += t.val * vh / 100.f * t.mul; break;
         default: sum += t.val * t.mul; break;
       }
+    }
+    if (L.unit == L_MM && L.mm_op) {
+      auto sum_terms = [&](const CalcTerm* ts, int n) {
+        float s2 = 0;
+        for (int i = 0; i < n; i++) {
+          switch ((LUnit)ts[i].unit) {
+            case L_PX: s2 += ts[i].val * ts[i].mul; break;
+            case L_PCT: s2 += ts[i].val * pct_basis / 100.f * ts[i].mul; break;
+            case L_EM: s2 += ts[i].val * em * ts[i].mul; break;
+            case L_REM: s2 += ts[i].val * rem * ts[i].mul; break;
+            case L_VW: s2 += ts[i].val * vw / 100.f * ts[i].mul; break;
+            case L_VH: s2 += ts[i].val * vh / 100.f * ts[i].mul; break;
+            default: s2 += ts[i].val * ts[i].mul; break;
+          }
+        }
+        return s2;
+      };
+      float r1 = sum_terms(L.terms_min, L.nmin);
+      float r2 = L.nmax ? sum_terms(L.terms_max, L.nmax) : r1;
+      return L.mm_op == 1 ? std::min(r1, r2) : std::max(r1, r2);
     }
     if (L.has_clamp && L.unit == L_CLAMP) {
       auto sum_terms = [&](const CalcTerm* ts, int n) {

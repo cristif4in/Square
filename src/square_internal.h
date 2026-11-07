@@ -51,7 +51,7 @@ struct RoundedClip {
 };
 
 /* length / units ------------------------------------------------------ */
-enum LUnit : uint8_t { L_AUTO = 0, L_PX, L_PCT, L_EM, L_REM, L_VW, L_VH, L_CH, L_FR, L_DEG, L_CALC, L_NORMAL, L_CLAMP };
+enum LUnit : uint8_t { L_AUTO = 0, L_PX, L_PCT, L_EM, L_REM, L_VW, L_VH, L_CH, L_FR, L_DEG, L_CALC, L_NORMAL, L_CLAMP, L_MM };
 struct CalcTerm { float val = 0; uint8_t unit = L_PX; float mul = 1; };
 struct Length {
   LUnit unit = L_AUTO;
@@ -59,6 +59,7 @@ struct Length {
   uint8_t ncalc = 0;             /* when unit==L_CALC: number of terms */
   CalcTerm terms[8];             /* flat sum: sum(term.val * mul) px+percent mixed */
   uint8_t has_clamp = 0;         /* unit==L_CLAMP: base in terms[], bounds below */
+  uint8_t mm_op = 0;             /* 1 = min(arg1,arg2), 2 = max(...) (args in nmin/nmax) */
   uint8_t nmin = 0, nmax = 0;    /* clamp bounds as flat term lists (value type) */
   CalcTerm terms_min[8];
   CalcTerm terms_max[8];

@@ -482,18 +482,29 @@ static void page_thread_entry(Instance* inst, std::string url, bool as_html) {
   }
 }
 
+static void navigate_begin(Instance* inst, const std::function<void()>& start) {
+  /* Runs on a throwaway thread: signal the old page to exit, join it, then
+   * start the new page thread. The CALLING (UI) thread never blocks — joining
+   * here used to freeze the whole browser whenever a page was slow to stop. */
+  std::thread([inst, start]() {
+    if (inst->nav_busy.exchange(true)) return; /* a navigation is already in flight */
+    inst->cancel = true;
+    if (inst->page_thread.joinable()) inst->page_thread.join();
+    inst->cancel = false;
+    inst->dirty = false;
+    inst->loading = 0;
+    start();
+    inst->nav_busy = false;
+  }).detach();
+}
+
 void square_load_url(square_instance* p, const char* url) {
   Instance* inst = as_inst(p);
   if (!inst || !url) return;
-  /* signal the running page to exit BEFORE joining — its event loop only
-   * stops on cancel; joining without it blocks the caller indefinitely */
-  inst->cancel = true;
-  if (inst->page_thread.joinable()) inst->page_thread.join();
-  inst->cancel = false;
-  inst->dirty = false;
-  inst->loading = 0;
   std::string u = url;
-  run_with_big_stack([inst, u]() { page_thread_entry(inst, u, false); }, inst->page_thread);
+  navigate_begin(inst, [inst, u]() {
+    run_with_big_stack([inst, u]() { page_thread_entry(inst, u, false); }, inst->page_thread);
+  });
 }
 
 /* ============================ input / hit testing ============================ */
@@ -693,14 +704,11 @@ SQRL_API int square_send_click(square_instance* p, float x, float y, int button)
 void square_load_html(square_instance* p, const char* html_utf8, const char* base_url) {
   Instance* inst = as_inst(p);
   if (!inst || !html_utf8) return;
-  inst->cancel = true;
-  if (inst->page_thread.joinable()) inst->page_thread.join();
-  inst->cancel = false;
-  inst->dirty = false;
-  inst->loading = 0;
   inst->pending_html = html_utf8;
   std::string base = base_url ? base_url : "";
-  run_with_big_stack([inst, base]() { page_thread_entry(inst, base, true); }, inst->page_thread);
+  navigate_begin(inst, [inst, base]() {
+    run_with_big_stack([inst, base]() { page_thread_entry(inst, base, true); }, inst->page_thread);
+  });
 }
 
 void square_stop(square_instance* p) {

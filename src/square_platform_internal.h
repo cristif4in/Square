@@ -137,6 +137,7 @@ struct Instance {
   float mouse_x = -1, mouse_y = -1;
   bool mouse_valid = false;
   int same_url_hops = 0;               /* reload-loop guard */
+  std::atomic<bool> nav_busy{false};   /* a navigation join/start is in flight */
 
   Instance() : pool(std::max(2, (int)std::thread::hardware_concurrency())) {}
 };
