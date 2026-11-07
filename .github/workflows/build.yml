@@ -205,24 +205,26 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: square-linux-x64
-          path: dist
+          path: dist/linux
 
       - name: Download Windows artifacts
         if: steps.ver.outputs.release == 'true'
         uses: actions/download-artifact@v4
         with:
           name: square-windows-x64
-          path: dist
+          path: dist/windows
 
       - name: Create release
         if: steps.ver.outputs.release == 'true'
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
-          find dist -type f
-          # files are flattened into dist/ (artifact paths are relative to build/)
-          mapfile -t FILES < <(find dist -type f)
+          (cd dist/linux && zip -q -r ../square-linux-x64.zip .)
+          (cd dist/windows && zip -q -r ../square-windows-x64.zip .)
+          ls -la dist/*.zip
 
-          gh release create "$VERSION" "${FILES[@]}" \
+          gh release create "$VERSION" \
+            dist/square-linux-x64.zip \
+            dist/square-windows-x64.zip \
             --repo "$REPO" \
             --target "$GITHUB_SHA" \
             --title "$VERSION" \
