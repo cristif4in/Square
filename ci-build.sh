@@ -69,14 +69,14 @@ if [ "$WINDOWS" = "1" ]; then
     $OUT/qjs_*.o $OUT/fonts_embed.o $OUT/z/*.o $OUT/webp/*.o \
     $OUT/square_css.o $OUT/square_style.o $OUT/square_content.o $OUT/square_layout.o $OUT/square_gfx.o \
     $OUT/square_net.o $OUT/square_platform.o $OUT/square_platform_api.o \
-    -static-libgcc -static-libstdc++ -Wl,--out-implib,$OUT/libsquare.a \
+    -static -Wl,--out-implib,$OUT/libsquare.a \
     -lpthread -lm -lws2_32 -lsecur32 -lcrypt32 -ladvapi32
   if [ -f test/engine_main.cpp ]; then
     $CXX -std=c++17 -O2 -Iinclude test/engine_main.cpp -o $OUT/square_engine.exe \
-      -L$OUT -lsquare -lpthread
+      -L$OUT -lsquare -static -lpthread
   fi
   $CXX -std=c++17 -O2 -Iinclude app/browser_main.cpp app/browser_win32.cpp \
-    -o $OUT/square_browser.exe -L$OUT -lsquare -lgdi32 -luser32 -lshell32 -lpthread
+    -o $OUT/square_browser.exe -L$OUT -lsquare -static -lgdi32 -luser32 -lshell32 -lpthread
   echo "Done: $OUT/square.dll $OUT/square_browser.exe"
 else
   $CXX -shared -o $OUT/libsquare.so \
