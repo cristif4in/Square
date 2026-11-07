@@ -2,7 +2,8 @@
  *  Square Browser Engine — internal shared definitions
  *  Modules:
  *    square_content.cpp   HTML parser, CSS parser, cascade, computed styles
- *    square_layout.cpp    box tree, layout (block/inline/flex/grid/abs), paint
+ *    square_layout_*.cpp  box tree, layout (block/inline/flex/grid/abs),
+ *                         paint (see square_layout_internal.h for the map)
  *    square_gfx.cpp       software rasterizer, fonts, images, SVG
  *    square_net.cpp       HTTP/1.1 + TLS + gzip + URL + thread pool
  *    square_platform.cpp  engine instance, load pipeline, QuickJS + DOM API
@@ -546,7 +547,7 @@ bool gfx_write_png(const char* path, const uint8_t* bgra, int w, int h, int stri
 /* log helper used by all modules (set by platform) */
 void engine_log(int level, const char* fmt, ...);
 
-/* ============================ layout entry (square_layout.cpp) ============================ */
+/* ============================ layout entry (square_layout_*.cpp) ============================ */
 struct ImageCacheView {
   /* returns a COPY (the underlying map may rehash while pool threads decode) */
   virtual ImageInfo find(const std::string& url) = 0;

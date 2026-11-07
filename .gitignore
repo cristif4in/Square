@@ -13,3 +13,8 @@ page.png
 
 # misc
 *.log
+
+# test folders
+test/
+tests/
+thirdparty/tests/

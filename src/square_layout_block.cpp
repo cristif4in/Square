@@ -169,7 +169,6 @@ float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
   float content_h = cur_y;
   b->last_line_baseline = y0 + content_h;
   (void)max_w;
-  (void)w_measured;
   return content_h;
 }
 
