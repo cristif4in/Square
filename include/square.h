@@ -94,9 +94,12 @@ SQRL_API int         square_get_page_size(square_instance* inst, int* out_w, int
 /* ---------------- rendering ----------------
  * BGRA (little-endian ARGB), top-down rows, straight alpha.
  * Thread-safe: may be called from any thread; renders the newest layout.
+ * dst_h_px bounds the destination height: if the engine's last frame is
+ * taller (the viewport was just resized), only the first dst_h_px rows are
+ * copied — without this, a window shrink overflows the caller's buffer.
  * Returns 1 on success, 0 when nothing has been parsed yet. */
 SQRL_API int  square_render_bgra(square_instance* inst, uint8_t* dst,
-                                 int dst_stride_bytes);
+                                 int dst_stride_bytes, int dst_h_px);
 /* Save a PNG. full_page=0 -> viewport, 1 -> whole document height.
  * Returns 1 on success. */
 SQRL_API int  square_save_png(square_instance* inst, const char* path,

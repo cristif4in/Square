@@ -115,7 +115,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       /* engine frame: render straight into the DIB, then blit once */
       if (g_ui.vw > 0 && g_ui.vh > 0) {
         ui_ensure_dib(g_ui.vw, g_ui.vh);
-        if (square_render_bgra(g_ui.inst, g_ui.dib_bits, g_ui.vw * 4)) {
+        if (square_render_bgra(g_ui.inst, g_ui.dib_bits, g_ui.vw * 4, g_ui.vh)) {
           HDC mem = CreateCompatibleDC(dc);
           HBITMAP old = (HBITMAP)SelectObject(mem, g_ui.dib);
           BitBlt(dc, 0, TOOLBAR_H, g_ui.vw, g_ui.vh, mem, 0, 0, SRCCOPY);

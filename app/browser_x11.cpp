@@ -70,7 +70,7 @@ static void ui_render_frame(BrowserUI& ui) {
                           24, ZPixmap, 0, (char*)ui.buffer.data(), ui.vw, ui.vh, 32, ui.vw * 4);
   }
   if (!ui.img) return;
-  if (square_render_bgra(ui.inst, ui.buffer.data(), ui.vw * 4)) {
+  if (square_render_bgra(ui.inst, ui.buffer.data(), ui.vw * 4, ui.vh)) {
     /* blit the engine frame below the toolbar */
     XPutImage(ui.dpy, ui.win, ui.gc, ui.img, 0, 0, 0, TOOLBAR_H, ui.vw, ui.vh);
   }
