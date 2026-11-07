@@ -100,7 +100,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       g_ui.vw = w;
       g_ui.vh = std::max(50, h - TOOLBAR_H);
       square_set_viewport(g_ui.inst, g_ui.vw, g_ui.vh);
-      InvalidateRect(hwnd, nullptr, FALSE);
+      /* invalidate only the page area — repainting the toolbar every frame
+       * is what made it flicker */
+      RECT rc = {0, TOOLBAR_H, w, TOOLBAR_H + g_ui.vh};
+      InvalidateRect(hwnd, &rc, FALSE);
       return 0;
     }
     case WM_PAINT: {
@@ -109,13 +112,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       /* toolbar bg */
       RECT tb = {0, 0, g_ui.vw, TOOLBAR_H};
       FillRect(dc, &tb, g_ui.bg_brush);
-      /* engine frame */
+      /* engine frame: render straight into the DIB, then blit once */
       if (g_ui.vw > 0 && g_ui.vh > 0) {
         ui_ensure_dib(g_ui.vw, g_ui.vh);
-        std::vector<uint8_t> tmp((size_t)g_ui.vw * g_ui.vh * 4);
-        if (square_render_bgra(g_ui.inst, tmp.data(), g_ui.vw * 4)) {
-          for (int y = 0; y < g_ui.vh; y++)
-            memcpy(g_ui.dib_bits + (size_t)y * g_ui.vw * 4, tmp.data() + (size_t)y * g_ui.vw * 4, g_ui.vw * 4);
+        if (square_render_bgra(g_ui.inst, g_ui.dib_bits, g_ui.vw * 4)) {
           HDC mem = CreateCompatibleDC(dc);
           HBITMAP old = (HBITMAP)SelectObject(mem, g_ui.dib);
           BitBlt(dc, 0, TOOLBAR_H, g_ui.vw, g_ui.vh, mem, 0, 0, SRCCOPY);
@@ -146,7 +146,9 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
           }
         }
       }
-      InvalidateRect(hwnd, nullptr, FALSE);
+      /* repaint only the page area; the toolbar controls redraw themselves */
+      RECT rc = {0, TOOLBAR_H, g_ui.vw, TOOLBAR_H + g_ui.vh};
+      InvalidateRect(hwnd, &rc, FALSE);
       return 0;
     }
     case WM_MOUSEMOVE: {

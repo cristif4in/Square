@@ -1042,6 +1042,41 @@ class SQNode {
     return child;
   }
   removeChild(child) { C.remove(this._ptr, child._ptr); return child; }
+  insertAdjacentHTML(position, html) {
+    const p = C.parent(this._ptr);
+    if ((position === 'beforebegin' || position === 'afterend') && p === null) return;
+    /* parse into a detached temp element, then move the nodes into place */
+    const tmp = document.createElement('div');
+    C.setHtml(tmp._ptr, String(html == null ? '' : html));
+    const arr = C.childNodes(tmp._ptr);
+    for (let i = 0; i < arr.length; i++) {
+      const k = new SQNode(arr[i]);
+      if (position === 'beforeend') {
+        C.append(this._ptr, k._ptr);
+      } else if (position === 'afterbegin') {
+        C.insertBefore(this._ptr, k._ptr, C.firstChild(this._ptr));
+      } else if (position === 'afterend') {
+        C.insertBefore(p, k._ptr, C.nextSibling(this._ptr));
+      } else if (position === 'beforebegin') {
+        C.insertBefore(p, k._ptr, this._ptr);
+      }
+    }
+  }
+  insertAdjacentElement(position, el) {
+    const p = C.parent(this._ptr);
+    if ((position === 'beforebegin' || position === 'afterend') && p === null) return null;
+    if (!el || el._ptr === undefined) return null;
+    if (position === 'beforeend') C.append(this._ptr, el._ptr);
+    else if (position === 'afterbegin') C.insertBefore(this._ptr, el._ptr, C.firstChild(this._ptr));
+    else if (position === 'afterend') C.insertBefore(p, el._ptr, C.nextSibling(this._ptr));
+    else if (position === 'beforebegin') C.insertBefore(p, el._ptr, this._ptr);
+    return el;
+  }
+  insertAdjacentText(position, text) {
+    const t = document.createTextNode(String(text == null ? '' : text));
+    this.insertAdjacentElement(position, t);
+    return t;
+  }
   append(...nodes) { for (const n of nodes) this.appendChild(typeof n === 'object' ? n : document.createTextNode(String(n))); }
   prepend(...nodes) { for (const n of nodes.reverse()) this.insertBefore(typeof n === 'object' ? n : document.createTextNode(String(n)), this.firstChild); }
   remove() { const p = C.parent(this._ptr); if (p !== null) C.remove(p, this._ptr); }
