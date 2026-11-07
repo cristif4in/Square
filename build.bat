@@ -31,11 +31,11 @@ for %%f in (%WEBP%\src\dec\*.c %WEBP%\src\utils\*.c %WEBP%\src\dsp\*.c) do (
   gcc -c -O2 -I%WEBP% -I%WEBP%\src -Wno-unused-function -Wno-unused-variable -Wno-attributes -Wno-sign-compare %%f -o %OUT%\webp_%%~nf.o
 )
 echo [3/4] Engine modules (C++)
-for %%f in (square_content square_css square_style square_layout_common square_layout_inline square_layout_block square_layout_flex square_layout_grid square_layout_table square_layout_paint square_css_selectors square_css_values square_font square_image square_svg square_gfx square_net square_platform square_platform_api) do (
+for %%f in (square_content square_css square_style square_layout_common square_layout_inline square_layout_block square_layout_flex square_layout_grid square_layout_table square_layout_paint square_css_selectors square_css_values square_font square_image square_svg square_gfx square_net square_platform square_platform_dom square_platform_js square_platform_api) do (
   g++ -c -std=c++17 -O2 -Wall -DSQUARE_BUILD_DLL -Iinclude -Isrc -Ithirdparty -I%WEBP%\src src\%%f.cpp -o %OUT%\%%f.o
 )
 echo [4/4] square.dll + executables
-g++ -shared -o %OUT%\square.dll %OUT%\qjs_*.o %OUT%\fonts_embed.o %OUT%\z_*.o %OUT%\webp_*.o %OUT%\square_content.o %OUT%\square_layout_common.o %OUT%\square_layout_inline.o %OUT%\square_layout_block.o %OUT%\square_layout_flex.o %OUT%\square_layout_grid.o %OUT%\square_layout_table.o %OUT%\square_layout_paint.o %OUT%\square_css_selectors.o %OUT%\square_css_values.o %OUT%\square_font.o %OUT%\square_image.o %OUT%\square_svg.o %OUT%\square_gfx.o %OUT%\square_net.o %OUT%\square_platform.o ^
+g++ -shared -o %OUT%\square.dll %OUT%\qjs_*.o %OUT%\fonts_embed.o %OUT%\z_*.o %OUT%\webp_*.o %OUT%\square_content.o %OUT%\square_layout_common.o %OUT%\square_layout_inline.o %OUT%\square_layout_block.o %OUT%\square_layout_flex.o %OUT%\square_layout_grid.o %OUT%\square_layout_table.o %OUT%\square_layout_paint.o %OUT%\square_css_selectors.o %OUT%\square_css_values.o %OUT%\square_font.o %OUT%\square_image.o %OUT%\square_svg.o %OUT%\square_gfx.o %OUT%\square_net.o %OUT%\square_platform.o %OUT%\square_platform_dom.o %OUT%\square_platform_js.o ^
   -static -Wl,--output-def,%OUT%\square.def ^
   -Wl,--out-implib,%OUT%\libsquare.a -lpthread -lm -lws2_32 -lsecur32 -lcrypt32 -ladvapi32
 g++ -std=c++17 -O2 -Iinclude test\engine_main.cpp -o %OUT%\square_engine.exe -L%OUT% -lsquare -static -lpthread
@@ -54,7 +54,7 @@ for %%f in (%WEBP%\src\dec\*.c %WEBP%\src\utils\*.c %WEBP%\src\dsp\*.c) do (
   cl /c /O2 /I%WEBP% /I%WEBP%\src /Fo%OUT%\webp_%%~nf.obj %%f
 )
 echo [3/4] Engine modules (C++)
-for %%f in (square_content square_css square_style square_layout_common square_layout_inline square_layout_block square_layout_flex square_layout_grid square_layout_table square_layout_paint square_css_selectors square_css_values square_font square_image square_svg square_gfx square_net square_platform square_platform_api) do (
+for %%f in (square_content square_css square_style square_layout_common square_layout_inline square_layout_block square_layout_flex square_layout_grid square_layout_table square_layout_paint square_css_selectors square_css_values square_font square_image square_svg square_gfx square_net square_platform square_platform_dom square_platform_js square_platform_api) do (
   cl /c /std:c++17 /O2 /W3 /DSQUARE_BUILD_DLL /Iinclude /Isrc /Ithirdparty /I%WEBP%\src /Fo%OUT%\%%f.obj src\%%f.cpp
 )
 echo [4/4] square.dll + executables
