@@ -1,12 +1,14 @@
 # Square Browser Engine
 
+[![build](https://github.com/cristif4in/Square/actions/workflows/build.yml/badge.svg)](https://github.com/cristif4in/Square/actions/workflows/build.yml)
+
 Square is a from-scratch browser engine written in C++17. It ships as a shared
 library (`libsquare.so` on Linux, `square.dll` on Windows).
 
 ## Versioning
 
 Each release adds +11 patch number to the patch section: 1.a.0001 → 1.a.0012 → 1.a.0023 → …
-If it would pass 9999/9998, the major goes up and the patch restarts: 1.a.9990 → 2.a.0001 → 2.a.0012.
+If it would pass 9999/9998, the major goes up and the patch restarts: 1.a.9990 → 2.a.0001 → 2.a.0012. the second letter which right now is ".a" indicates the milestone, which as of now is Alpha. it may change as we reach milestones
 
 ## What's inside (all written for this project)
 
