@@ -1,0 +1,85 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ gcc libssl-dev zlib1g-dev libx11-dev
+
+      - name: Build (libsquare.so + square_engine + square_browser)
+        run: bash ci-build.sh
+
+      - name: Smoke test (local file load)
+        run: |
+          if [ -f build/square_engine ]; then
+            cat > /tmp/smoke.html <<'HTML'
+            <html><head><title>CI smoke</title></head>
+            <body><h1>hello from CI</h1></body></html>
+            HTML
+            ./build/square_engine "file:///tmp/smoke.html"
+          else
+            echo "engine harness not present (test/ removed) — skipping smoke test"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: square-linux-x64
+          path: |
+            build/libsquare.so
+            build/square_engine
+            build/square_browser
+
+  windows:
+    name: Windows build (MinGW-w64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            make
+            git
+
+      - name: Build (square.dll + square_engine.exe + square_browser.exe)
+        run: bash ci-build.sh
+
+      - name: Smoke test (local file load)
+        run: |
+          if [ -f build/square_engine.exe ]; then
+            cat > /tmp/smoke.html <<'HTML'
+            <html><head><title>CI smoke</title></head>
+            <body><h1>hello from CI</h1></body></html>
+            HTML
+            ./build/square_engine.exe "file:///tmp/smoke.html"
+          else
+            echo "engine harness not present (test/ removed) — skipping smoke test"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: square-windows-x64
+          path: |
+            build/square.dll
+            build/libsquare.a
+            build/square_engine.exe
+            build/square_browser.exe
