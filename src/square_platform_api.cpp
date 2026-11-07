@@ -485,6 +485,9 @@ static void page_thread_entry(Instance* inst, std::string url, bool as_html) {
 void square_load_url(square_instance* p, const char* url) {
   Instance* inst = as_inst(p);
   if (!inst || !url) return;
+  /* signal the running page to exit BEFORE joining — its event loop only
+   * stops on cancel; joining without it blocks the caller indefinitely */
+  inst->cancel = true;
   if (inst->page_thread.joinable()) inst->page_thread.join();
   inst->cancel = false;
   inst->dirty = false;
@@ -684,6 +687,7 @@ SQRL_API int square_send_click(square_instance* p, float x, float y, int button)
 void square_load_html(square_instance* p, const char* html_utf8, const char* base_url) {
   Instance* inst = as_inst(p);
   if (!inst || !html_utf8) return;
+  inst->cancel = true;
   if (inst->page_thread.joinable()) inst->page_thread.join();
   inst->cancel = false;
   inst->dirty = false;
@@ -736,13 +740,14 @@ int square_get_page_size(square_instance* p, int* out_w, int* out_h) {
   return inst->root_box ? 1 : 0;
 }
 
-int square_render_bgra(square_instance* p, uint8_t* dst, int dst_stride) {
+int square_render_bgra(square_instance* p, uint8_t* dst, int dst_stride, int dst_h_px) {
   Instance* inst = as_inst(p);
   if (!inst || !dst) return 0;
   std::lock_guard<std::mutex> plk(inst->paint_mtx);
   if (!inst->latest.pix || inst->latest.w <= 0) return 0;
   int copy_w = std::min(dst_stride / 4, inst->latest.w);
-  for (int y = 0; y < inst->latest.h; y++) {
+  int rows = std::min(inst->latest.h, dst_h_px > 0 ? dst_h_px : 0);
+  for (int y = 0; y < rows; y++) {
     memcpy(dst + (size_t)y * dst_stride, inst->latest.row32(y), copy_w * 4);
   }
   return 1;
