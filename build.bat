@@ -36,10 +36,10 @@ for %%f in (square_content square_css square_style square_layout square_gfx squa
 )
 echo [4/4] square.dll + executables
 g++ -shared -o %OUT%\square.dll %OUT%\qjs_*.o %OUT%\fonts_embed.o %OUT%\z_*.o %OUT%\webp_*.o %OUT%\square_content.o %OUT%\square_layout.o %OUT%\square_gfx.o %OUT%\square_net.o %OUT%\square_platform.o ^
-  -static-libgcc -static-libstdc++ -Wl,--output-def,%OUT%\square.def ^
+  -static -Wl,--output-def,%OUT%\square.def ^
   -Wl,--out-implib,%OUT%\libsquare.a -lpthread -lm -lws2_32 -lsecur32 -lcrypt32 -ladvapi32
-g++ -std=c++17 -O2 -Iinclude test\engine_main.cpp -o %OUT%\square_engine.exe -L%OUT% -lsquare -lpthread
-g++ -std=c++17 -O2 -Iinclude app\browser_main.cpp app\browser_win32.cpp -o %OUT%\square_browser.exe -L%OUT% -lsquare -lgdi32 -luser32 -lshell32 -lpthread
+g++ -std=c++17 -O2 -Iinclude test\engine_main.cpp -o %OUT%\square_engine.exe -L%OUT% -lsquare -static -lpthread
+g++ -std=c++17 -O2 -Iinclude app\browser_main.cpp app\browser_win32.cpp -o %OUT%\square_browser.exe -L%OUT% -lsquare -static -lgdi32 -luser32 -lshell32 -lpthread
 echo Done: %OUT%\square.dll %OUT%\square_engine.exe %OUT%\square_browser.exe
 goto :eof
 
