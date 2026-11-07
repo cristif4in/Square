@@ -23,10 +23,7 @@ jobs:
       - name: Smoke test (local file load)
         run: |
           if [ -f build/square_engine ]; then
-            cat > /tmp/smoke.html <<'HTML'
-            <html><head><title>CI smoke</title></head>
-            <body><h1>hello from CI</h1></body></html>
-            HTML
+            echo '<html><head><title>CI smoke</title></head><body><h1>hello from CI</h1></body></html>' > /tmp/smoke.html
             ./build/square_engine "file:///tmp/smoke.html"
           else
             echo "engine harness not present (test/ removed) — skipping smoke test"
@@ -65,10 +62,7 @@ jobs:
       - name: Smoke test (local file load)
         run: |
           if [ -f build/square_engine.exe ]; then
-            cat > /tmp/smoke.html <<'HTML'
-            <html><head><title>CI smoke</title></head>
-            <body><h1>hello from CI</h1></body></html>
-            HTML
+            echo '<html><head><title>CI smoke</title></head><body><h1>hello from CI</h1></body></html>' > /tmp/smoke.html
             ./build/square_engine.exe "file:///tmp/smoke.html"
           else
             echo "engine harness not present (test/ removed) — skipping smoke test"
