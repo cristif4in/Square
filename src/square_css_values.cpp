@@ -702,11 +702,13 @@ Display parse_display(const std::string& v) {
   if (s == "grid") return D_GRID;
   if (s == "inline-grid") return D_INLINE_GRID;
   if (s == "table") return D_TABLE;
+  if (s == "inline-table") return D_INLINE_TABLE;
   if (s == "table-row") return D_TABLE_ROW;
   if (s == "table-cell") return D_TABLE_CELL;
+  if (s == "table-row-group" || s == "table-header-group" || s == "table-footer-group")
+    return D_TABLE_ROW_GROUP;
   if (s == "list-item") return D_LIST_ITEM;
-  if (s == "contents" || s == "flow-root" || s == "table-caption" || s == "table-row-group" ||
-      s == "table-header-group" || s == "table-footer-group")
+  if (s == "contents" || s == "flow-root" || s == "table-caption")
     return s == "contents" ? D_NONE : D_BLOCK; /* flow-root -> block approximation */
   return D_INLINE;
 }

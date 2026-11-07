@@ -37,7 +37,7 @@ echo "[3/7] Embedded fonts"
 $CC -c -fPIC thirdparty/fonts_embed.c -o $OUT/fonts_embed.o
 
 echo "[4/7] Engine modules (C++)"
-for f in square_content square_css square_style square_layout_common square_layout_inline square_layout_block square_layout_flex square_layout_grid square_layout_paint square_css_selectors square_css_values square_font square_image square_svg square_gfx square_net square_platform square_platform_api; do
+for f in square_content square_css square_style square_layout_common square_layout_inline square_layout_block square_layout_flex square_layout_grid square_layout_table square_layout_paint square_css_selectors square_css_values square_font square_image square_svg square_gfx square_net square_platform square_platform_api; do
   $CXX -c $CXXFLAGS src/$f.cpp -o $OUT/$f.o &
 done
 wait
@@ -45,7 +45,7 @@ wait
 echo "[5/7] libsquare.so"
 $CXX -shared -o $OUT/libsquare.so \
   $OUT/qjs_*.o $OUT/fonts_embed.o $OUT/webp/*.o \
-  $OUT/square_css.o $OUT/square_style.o $OUT/square_content.o $OUT/square_layout_common.o $OUT/square_layout_inline.o $OUT/square_layout_block.o $OUT/square_layout_flex.o $OUT/square_layout_grid.o $OUT/square_layout_paint.o $OUT/square_css_selectors.o $OUT/square_css_values.o $OUT/square_font.o $OUT/square_image.o $OUT/square_svg.o $OUT/square_gfx.o \
+  $OUT/square_css.o $OUT/square_style.o $OUT/square_content.o $OUT/square_layout_common.o $OUT/square_layout_inline.o $OUT/square_layout_block.o $OUT/square_layout_flex.o $OUT/square_layout_grid.o $OUT/square_layout_table.o $OUT/square_layout_paint.o $OUT/square_css_selectors.o $OUT/square_css_values.o $OUT/square_font.o $OUT/square_image.o $OUT/square_svg.o $OUT/square_gfx.o \
   $OUT/square_net.o $OUT/square_platform.o $OUT/square_platform_api.o \
   -lz -lssl -lcrypto -lpthread -ldl -lm
 

@@ -86,9 +86,9 @@ float res_l(const Length& L, float pct_basis, float em, LayoutCtx& lc) {
 /* ============================ style predicates ============================ */
 bool is_blocky(Display d) {
   return d == D_BLOCK || d == D_FLEX || d == D_GRID || d == D_TABLE || d == D_LIST_ITEM ||
-         d == D_TABLE_ROW || d == D_TABLE_CELL;
+         d == D_TABLE_ROW || d == D_TABLE_CELL || d == D_TABLE_ROW_GROUP;
 }
-bool is_atomic_inline(Display d) { return d == D_INLINE_BLOCK || d == D_INLINE_FLEX; }
+bool is_atomic_inline(Display d) { return d == D_INLINE_BLOCK || d == D_INLINE_FLEX || d == D_INLINE_TABLE; }
 bool node_invisible(const ComputedStyle* cs) {
   return !cs || cs->display == D_NONE || cs->visibility_hidden;
 }

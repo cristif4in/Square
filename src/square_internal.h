@@ -238,7 +238,8 @@ struct Document {
 enum Display : uint8_t {
   D_NONE = 0, D_BLOCK, D_INLINE, D_INLINE_BLOCK, D_FLEX, D_INLINE_FLEX,
   D_GRID, D_INLINE_GRID, D_TABLE, D_TABLE_ROW, D_TABLE_CELL, D_LIST_ITEM,
-  D_INLINE_FLEX_BOX /*internal*/, D_TEXT
+  D_INLINE_FLEX_BOX /*internal*/, D_TEXT,
+  D_TABLE_ROW_GROUP, D_INLINE_TABLE
 };
 enum PosKind : uint8_t { P_STATIC = 0, P_RELATIVE, P_ABSOLUTE, P_FIXED, P_STICKY };
 enum Overflow : uint8_t { O_VISIBLE = 0, O_HIDDEN, O_SCROLL, O_AUTO, O_CLIP };

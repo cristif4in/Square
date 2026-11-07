@@ -223,8 +223,10 @@ float layout_element(Box* b, Node* el, LayoutCtx& lc) {
     content_h = layout_flex_content(b, el, lc);
   } else if (cs->display == D_GRID || cs->display == D_INLINE_GRID) {
     content_h = layout_grid_content(b, el, lc);
-  } else if (cs->display == D_TABLE || cs->display == D_TABLE_ROW || cs->display == D_TABLE_CELL) {
-    /* table approximation: treat as block */
+  } else if (cs->display == D_TABLE || cs->display == D_INLINE_TABLE) {
+    content_h = layout_table_content(b, el, lc);
+  } else if (cs->display == D_TABLE_ROW || cs->display == D_TABLE_CELL) {
+    /* stray rows/cells outside a table: fall back to block flow */
     content_h = layout_block_content(b, el, lc);
   } else {
     content_h = layout_block_content(b, el, lc);

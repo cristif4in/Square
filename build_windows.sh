@@ -40,7 +40,7 @@ echo "[4/6] fonts"
 $ZIG cc -target $T -O2 -c thirdparty/fonts_embed.c -o $OUT/fonts_embed.o
 
 echo "[5/6] engine modules (C++)"
-for f in square_content square_css square_style square_layout_common square_layout_inline square_layout_block square_layout_flex square_layout_grid square_layout_paint square_css_selectors square_css_values square_font square_image square_svg square_gfx square_net square_platform square_platform_api; do
+for f in square_content square_css square_style square_layout_common square_layout_inline square_layout_block square_layout_flex square_layout_grid square_layout_table square_layout_paint square_css_selectors square_css_values square_font square_image square_svg square_gfx square_net square_platform square_platform_api; do
   $ZIG c++ -target $T -std=c++17 -O2 -DSQUARE_BUILD_DLL -Iinclude -Isrc -Ithirdparty -I$WEBP/src -I$ZLIB -c src/$f.cpp -o $OUT/$f.o
 done
 $ZIG c++ -target $T -std=c++17 -O2 -Iinclude -c test/engine_main.cpp -o $OUT/engine_main.o

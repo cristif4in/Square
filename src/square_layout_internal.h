@@ -64,5 +64,6 @@ float layout_element(Box* b, Node* el, LayoutCtx& lc);
 float layout_block_content(Box* b, Node* el, LayoutCtx& lc);
 float layout_flex_content(Box* b, Node* el, LayoutCtx& lc);
 float layout_grid_content(Box* b, Node* el, LayoutCtx& lc);
+float layout_table_content(Box* b, Node* el, LayoutCtx& lc);
 
 } /* namespace sqrl */
