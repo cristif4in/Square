@@ -2546,10 +2546,33 @@ js_done:;
         activity = true;
       }
     }
-    /* running CSS animations: repaint periodically so keyframes advance */
+    /* running CSS animations: repaint periodically so keyframes advance.
+     * Light path: re-evaluate keyframe values + layout + paint, skipping the
+     * selector cascade (that's what made animated pages lag). */
     if (inst->doc && inst->doc->sheet.has_animations && now_ms() - last_anim_frame >= 33) {
       last_anim_frame = now_ms();
-      inst->dirty = true;
+      std::lock_guard<std::mutex> doclk(inst->doc_mtx);
+      if (!inst->dirty && !inst->cancel && inst->doc->body) {
+        style_reanimate(inst->doc, inst->vw, inst->vh);
+        int vw = inst->vw, vh = inst->vh;
+        if (inst->root_box) free_box_tree(inst->root_box);
+        inst->root_box = nullptr;
+        inst->root_box = layout_document(inst->doc, vw, vh, &inst->images);
+        inst->page_h = inst->root_box ? (int)layout_page_height(inst->root_box) : vh;
+        int scroll_max = inst->page_h - vh;
+        if (scroll_max < 0) scroll_max = 0;
+        if (inst->scroll_y > scroll_max) inst->scroll_y = scroll_max;
+        std::lock_guard<std::mutex> plk(inst->paint_mtx);
+        if (inst->latest.w != vw || inst->latest.h != vh) {
+          inst->latest.free_pix();
+          inst->latest.alloc(vw, vh);
+        }
+        if (!getenv("SQRL_NO_PAINT"))
+          paint_document(inst->doc, inst->root_box, &inst->latest, &inst->images,
+                         (float)inst->scroll_y);
+      } else {
+        inst->dirty = true; /* other changes pending: full refresh */
+      }
     }
     /* navigation request? (link click) → leave this page; the request stays
      * queued for page_thread_entry to pick up */

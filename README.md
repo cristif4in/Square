@@ -3,6 +3,11 @@
 Square is a from-scratch browser engine written in C++17. It ships as a shared
 library (`libsquare.so` on Linux, `square.dll` on Windows).
 
+## Versioning
+
+Each release adds 11 to the patch: 1.a.0001 → 1.a.0012 → 1.a.0023 → …
+If it would pass 9999, the major goes up and the patch restarts: 1.a.9990 → 2.a.0001 → 2.a.0012.
+
 ## What's inside (all written for this project)
 
 - **HTML5 tokenizer + tree builder** — void elements, implied tags, tables,

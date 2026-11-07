@@ -77,3 +77,162 @@ jobs:
             build/libsquare.a
             build/square_engine.exe
             build/square_browser.exe
+
+  # ---------------------------------------------------------------------------
+  # Alpha release job
+  #
+  # Runs only when BOTH the linux and windows jobs succeeded, and only for
+  # pushes / manual runs on the default branch (never for pull requests).
+  #
+  # It does not release on every build: it releases once at least
+  # RELEASE_EVERY commits have piled up since the previous release. Failed
+  # builds never reach this job, so those commits just keep accumulating and
+  # get released by the next successful build (5th commit, or 6th if the 5th
+  # failed to compile, and so on).
+  #
+  # Version format:  <MAJOR>.<CHANNEL>.<PATCH>   e.g. 1.a.0001
+  #   MAJOR   starts at MAJOR_START, only bumps when PATCH would pass 9999
+  #   CHANNEL "a" (alpha) - change it here to rename it
+  #   PATCH   first release is 0001, then +PATCH_STEP (11) every release:
+  #           0001 -> 0012 -> 0023 ...  When it would exceed 9999 the major
+  #           goes up by one and PATCH restarts at 0001.
+  # The latest existing release tag (e.g. 2.a.0013) is always the base for the
+  # next version (-> 2.a.0024), so the counter never needs to be stored anywhere.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Alpha release
+    needs: [linux, windows]
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    concurrency:
+      group: alpha-release
+      cancel-in-progress: false
+    env:
+      MAJOR_START: "1"
+      CHANNEL: "a"
+      PATCH_STEP: "11"
+      RELEASE_EVERY: "5"
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide version + build release notes
+        id: ver
+        run: |
+          git fetch --tags --force
+
+          # Latest previous release tag, e.g. 2.a.0013 (version-sorted)
+          PREV=$( (git tag --list | grep -E "^[0-9]+\.${CHANNEL}\.[0-9]{4}$" | sort -V | tail -n1) || true )
+
+          if [ -z "$PREV" ]; then
+            RANGE="$GITHUB_SHA"
+            COUNT=$(git rev-list --count "$GITHUB_SHA")
+          else
+            RANGE="$PREV..$GITHUB_SHA"
+            COUNT=$(git rev-list --count "$RANGE")
+          fi
+
+          echo "Previous release: ${PREV:-none} | commits since: $COUNT | need: $RELEASE_EVERY"
+
+          if [ "$COUNT" -lt "$RELEASE_EVERY" ]; then
+            echo "Only tracking this commit (no release yet)."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # ---- compute next version ----
+          if [ -z "$PREV" ]; then
+            MAJOR=$MAJOR_START
+            PATCH=1
+          else
+            MAJOR=${PREV%%.*}
+            OLD_PATCH=${PREV##*.}
+            PATCH=$(( 10#$OLD_PATCH + PATCH_STEP ))
+            if [ "$PATCH" -gt 9999 ]; then
+              MAJOR=$(( MAJOR + 1 ))
+              PATCH=1
+            fi
+          fi
+          VERSION=$(printf "%s.%s.%04d" "$MAJOR" "$CHANNEL" "$PATCH")
+          echo "New version: $VERSION"
+
+          # ---- commits list (+ links) and contributors ----
+          : > commits.md
+          : > people.txt
+          echo "${{ github.repository_owner }}" >> people.txt
+
+          while IFS=$'\t' read -r FULL SHORT SUBJECT AUTHOR_NAME; do
+            echo "- [\`$SHORT\`](https://github.com/$REPO/commit/$FULL) $SUBJECT" >> commits.md
+
+            # commit author login (fallback: git author name)
+            LOGIN=$(gh api "repos/$REPO/commits/$FULL" --jq '.author.login // empty' 2>/dev/null || true)
+            if [ -n "$LOGIN" ]; then echo "@$LOGIN" >> people.txt; else echo "$AUTHOR_NAME" >> people.txt; fi
+
+            # people who opened the PR(s) this commit belongs to
+            gh api "repos/$REPO/commits/$FULL/pulls" --jq '.[].user.login' 2>/dev/null \
+              | sed 's/^/@/' >> people.txt || true
+          done < <(git log --reverse --format='%H%x09%h%x09%s%x09%an' "$RANGE")
+
+          # owner shown as @owner when it is a login
+          sed -i "1s/^/@/" people.txt
+          awk '!seen[$0]++' people.txt | sed 's/^/- /' > people.md
+
+          {
+            echo "Version: $VERSION"
+            echo
+            echo "Commits involving this release:"
+            echo
+            cat commits.md
+            echo
+            echo "Contribuitors:"
+            echo
+            cat people.md
+          } > notes.md
+
+          echo "release=true"      >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION"  >> "$GITHUB_OUTPUT"
+
+      - name: Download Linux artifacts
+        if: steps.ver.outputs.release == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: square-linux-x64
+          path: dist
+
+      - name: Download Windows artifacts
+        if: steps.ver.outputs.release == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: square-windows-x64
+          path: dist
+
+      - name: Create release
+        if: steps.ver.outputs.release == 'true'
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          find dist -type f
+          # files are flattened into dist/ (artifact paths are relative to build/)
+          mapfile -t FILES < <(find dist -type f)
+
+          gh release create "$VERSION" "${FILES[@]}" \
+            --repo "$REPO" \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --notes-file notes.md \
+            --prerelease
+
+      # Every release also carries the "alpha" tag: a floating tag that is
+      # moved to the commit of the newest release each time one is published.
+      - name: Move "alpha" tag to this release
+        if: steps.ver.outputs.release == 'true'
+        run: |
+          git tag -f alpha "$GITHUB_SHA"
+          git push -f origin refs/tags/alpha
