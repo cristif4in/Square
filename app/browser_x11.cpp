@@ -21,6 +21,7 @@ int run_headless(square_instance* inst, const std::string& url, int vw, int vh,
                    const std::string& out, int full_page);
 
 struct BrowserUI {
+  bool drag_sb = false;
   Display* dpy = nullptr;
   Window win = 0;
   GC gc = nullptr;
@@ -209,10 +210,14 @@ int run_x11(square_instance* inst, const std::string& url, int vw, int vh) {
           ui.address += buf[0];
         }
       } else if (ev.type == MotionNotify) {
-        /* hover styles + JS mousemove tracking (page coords below toolbar) */
-        if (ev.xmotion.y >= TOOLBAR_H)
+        if (ui.drag_sb) {
+          square_scrollbar_drag(ui.inst, ev.xmotion.y - TOOLBAR_H);
+        } else if (ev.xmotion.y >= TOOLBAR_H) {
+          /* hover styles + JS mousemove tracking (page coords below toolbar) */
           square_send_mouse_move(ui.inst, (float)ev.xmotion.x, (float)(ev.xmotion.y - TOOLBAR_H));
+        }
       } else if (ev.type == ButtonRelease && ev.xbutton.button == Button1) {
+        ui.drag_sb = false;
         if (ev.xbutton.y < TOOLBAR_H) {
           int mx = ev.xbutton.x;
           if (mx >= 8 && mx <= 26 && ui.can_back()) ui.go_back();
@@ -221,7 +226,24 @@ int run_x11(square_instance* inst, const std::string& url, int vw, int vh) {
           square_send_click(ui.inst, (float)ev.xbutton.x, (float)(ev.xbutton.y - TOOLBAR_H), 0);
         }
       } else if (ev.type == ButtonPress) {
-        if (ev.xbutton.y < TOOLBAR_H) ui.focused = true;
+        if (ev.xbutton.y < TOOLBAR_H) {
+          ui.focused = true;
+        } else if (ev.xbutton.button == Button1 &&
+                   square_scrollbar_hit(ui.inst, ev.xbutton.x)) {
+          ui.drag_sb = true;
+          square_scrollbar_drag(ui.inst, ev.xbutton.y - TOOLBAR_H);
+        } else if (ev.xbutton.button == Button4 || ev.xbutton.button == Button5) {
+          /* wheel up/down */
+          int pw = 0, ph = 0;
+          square_get_page_size(ui.inst, &pw, &ph);
+          int scroll_max = ph - ui.vh;
+          if (scroll_max < 0) scroll_max = 0;
+          int step = 3 * (ev.xbutton.button == Button4 ? -1 : 1) * 40;
+          int sy = square_get_scroll(ui.inst) + step;
+          if (sy < 0) sy = 0;
+          if (sy > scroll_max) sy = scroll_max;
+          square_set_scroll(ui.inst, sy);
+        }
       } else if (ev.type == ClientMessage) {
         if ((Atom)ev.xclient.data.l[0] == wm_delete) quit = true;
       }

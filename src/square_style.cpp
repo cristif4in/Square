@@ -6,6 +6,7 @@
 #include "square_content_internal.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cstdlib>
 
@@ -16,6 +17,7 @@ struct ResolveCtx {
   const CustomProps* vars = nullptr;
   float em = 16;    /* current font size for em in non-font props */
   float rem = 16;
+  float vw = 0, vh = 0; /* viewport, for vw/vh units in font-size etc. */
   Color current_color{0, 0, 0, 255};
 };
 
@@ -234,9 +236,58 @@ static bool parse_calc(const std::string& inner, Length* out, const ResolveCtx& 
   return true;
 }
 
-/* parse any length value: single component or calc(...) */
+/* split top-level commas (paren aware) */
+static void split_top_commas(const std::string& s, std::vector<std::string>* out) {
+  int pd = 0;
+  std::string cur;
+  for (char c : s) {
+    if (c == '(') pd++;
+    if (c == ')') pd--;
+    if (c == ',' && pd == 0) { out->push_back(trim(cur)); cur.clear(); continue; }
+    cur += c;
+  }
+  if (!trim(cur).empty()) out->push_back(trim(cur));
+}
+
+/* flatten a Length into CalcTerms so clamp bounds are value-copyable */
+static void length_to_terms(const Length& L, CalcTerm* out, uint8_t* n) {
+  if (L.unit == L_CALC) {
+    *n = (uint8_t)std::min((size_t)L.ncalc, (size_t)8);
+    for (int i = 0; i < *n; i++) out[i] = L.terms[i];
+    return;
+  }
+  out[0] = CalcTerm{L.val, (uint8_t)L.unit, 1};
+  *n = 1;
+}
+
+/* parse any length value: single component, calc(...) or clamp(a, b, c) */
 static bool parse_length(const std::string& raw, Length* out, const ResolveCtx& rc) {
   std::string v = trim(raw);
+  if (v.rfind("clamp(", 0) == 0 && v.back() == ')') {
+    std::vector<std::string> parts;
+    split_top_commas(v.substr(6, v.size() - 7), &parts);
+    if (parts.size() == 3) {
+      Length mn, mid, mx;
+      parse_length(parts[0], &mn, rc);
+      parse_length(parts[1], &mid, rc);
+      parse_length(parts[2], &mx, rc);
+      *out = Length();
+      if (mid.unit == L_CALC) {
+        out->ncalc = (uint8_t)std::min((size_t)mid.ncalc, (size_t)8);
+        for (int i = 0; i < out->ncalc; i++) out->terms[i] = mid.terms[i];
+      } else if (mid.unit != L_AUTO && mid.unit != L_NORMAL) {
+        out->ncalc = 1;
+        out->terms[0] = CalcTerm{mid.val, (uint8_t)mid.unit, 1};
+      } else {
+        return true; /* auto middle: no clamp possible */
+      }
+      out->unit = L_CLAMP;
+      out->has_clamp = 1;
+      length_to_terms(mn, out->terms_min, &out->nmin);
+      length_to_terms(mx, out->terms_max, &out->nmax);
+      return true;
+    }
+  }
   if (v.rfind("calc(", 0) == 0) {
     return parse_calc(v.substr(5, v.size() - 6), out, rc);
   }
@@ -539,7 +590,7 @@ static float resolve_length(const Length& L, float pct_basis, float em, float re
     case L_CH: return L.val; /* pre-scaled */
     default: break;
   }
-  if (L.unit == L_CALC) {
+  if (L.unit == L_CALC || L.unit == L_CLAMP) {
     float sum = 0;
     for (int i = 0; i < L.ncalc; i++) {
       const CalcTerm& t = L.terms[i];
@@ -552,6 +603,25 @@ static float resolve_length(const Length& L, float pct_basis, float em, float re
         case L_VH: sum += t.val * vh / 100.f * t.mul; break;
         default: sum += t.val * t.mul; break;
       }
+    }
+    if (L.has_clamp && L.unit == L_CLAMP) {
+      auto sum_terms = [&](const CalcTerm* ts, int n) {
+        float s2 = 0;
+        for (int i = 0; i < n; i++) {
+          switch ((LUnit)ts[i].unit) {
+            case L_PX: s2 += ts[i].val * ts[i].mul; break;
+            case L_PCT: s2 += ts[i].val * pct_basis / 100.f * ts[i].mul; break;
+            case L_EM: s2 += ts[i].val * em * ts[i].mul; break;
+            case L_REM: s2 += ts[i].val * rem * ts[i].mul; break;
+            case L_VW: s2 += ts[i].val * vw / 100.f * ts[i].mul; break;
+            case L_VH: s2 += ts[i].val * vh / 100.f * ts[i].mul; break;
+            default: s2 += ts[i].val * ts[i].mul; break;
+          }
+        }
+        return s2;
+      };
+      if (L.nmin) { float mn = sum_terms(L.terms_min, L.nmin); if (sum < mn) sum = mn; }
+      if (L.nmax) { float mx = sum_terms(L.terms_max, L.nmax); if (sum > mx) sum = mx; }
     }
     return sum;
   }
@@ -946,7 +1016,7 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     std::string sub = substitute_vars(v, rc);
     parse_length(sub, &L, rc);
     if (L.unit == L_AUTO || L.unit == L_NORMAL) return false;
-    float val = resolve_length(L, rc.em /* % of parent font size */, rc.em, rc.rem, 0, 0);
+    float val = resolve_length(L, rc.em /* % of parent font size */, rc.em, rc.rem, rc.vw, rc.vh);
     if (val > 0) cs->font_size = val;
     return true;
   }
@@ -1536,14 +1606,128 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     if (s == "\"\"" || s == "''") { cs->content = ""; cs->content_set = true; return true; }
     return true;
   }
+  if (prop == "font") {
+    /* shorthand: [style/weight/variant] size[/line-height] family */
+    std::vector<std::string> toks;
+    split_values(v, &toks);
+    size_t size_idx = toks.size();
+    for (size_t i = 0; i < toks.size(); i++) {
+      std::string s = lc(toks[i]);
+      bool has_unit = s.find("px") != std::string::npos || s.find("pt") != std::string::npos ||
+                      s.find("rem") != std::string::npos || s.find("em") != std::string::npos ||
+                      s.find('%') != std::string::npos;
+      bool has_slash = s.find('/') != std::string::npos;
+      /* numeric-only tokens ("500") are weights, never the size */
+      if (has_unit || has_slash) {
+        size_idx = i;
+        break;
+      }
+    }
+    for (size_t i = 0; i < size_idx && i < toks.size(); i++) {
+      std::string s = lc(toks[i]);
+      if (s == "bold" || s == "bolder" || s == "700" || s == "800" || s == "900")
+        cs->font_weight = 700;
+      else if (s == "500" || s == "600") cs->font_weight = atoi(s.c_str());
+      else if (s == "light" || s == "lighter" || s == "300") cs->font_weight = 300;
+      else if (s == "italic" || s == "oblique") cs->italic = true;
+    }
+    if (size_idx < toks.size()) {
+      std::string size_tok = toks[size_idx];
+      std::string lh;
+      size_t slash = size_tok.find('/');
+      if (slash != std::string::npos) {
+        lh = size_tok.substr(slash + 1);
+        size_tok = size_tok.substr(0, slash);
+      }
+      float sz = (float)atof(size_tok.c_str());
+      if (sz > 0) {
+        if (size_tok.find("pt") != std::string::npos) sz = sz * 96.f / 72.f;
+        else if (size_tok.size() > 3 && size_tok.substr(size_tok.size() - 3) == "rem") sz *= 16;
+        else if (size_tok.size() > 2 && size_tok.substr(size_tok.size() - 2) == "em") sz *= cs->font_size;
+        cs->font_size = sz;
+        rc.em = sz;
+      }
+      if (!lh.empty()) {
+        float n = (float)atof(lh.c_str());
+        if (n > 0) { cs->lh_normal = false; cs->line_height_mul = n; cs->line_height.unit = L_NORMAL; }
+      }
+      /* family = everything after the size */
+      std::string fam;
+      for (size_t i = size_idx + 1; i < toks.size(); i++) {
+        if (!fam.empty()) fam += ",";
+        fam += toks[i];
+      }
+      if (!fam.empty()) {
+        std::vector<std::string> fams;
+        std::string cur;
+        bool in_q = false;
+        char q = 0;
+        for (char c : fam) {
+          if (in_q) { if (c == q) in_q = false; else cur += c; continue; }
+          if (c == '"' || c == '\'') { in_q = true; q = c; continue; }
+          if (c == ',') { fams.push_back(trim(cur)); cur.clear(); continue; }
+          cur += c;
+        }
+        fams.push_back(trim(cur));
+        cs->font_family.clear();
+        for (auto& f2 : fams) if (!f2.empty()) cs->font_family.push_back(f2);
+      }
+    }
+    return true;
+  }
+  if (prop == "animation" || starts_with(prop, "animation-")) {
+    if (prop == "animation-name") { cs->anim_name = trim(v); return true; }
+    if (prop == "animation-duration") {
+      std::string s = lc(trim(v));
+      cs->anim_duration = (float)atof(s.c_str()) * (s.find("ms") != std::string::npos ? 0.001f : 1.f);
+      return true;
+    }
+    if (prop == "animation-delay") {
+      std::string s = lc(trim(v));
+      cs->anim_delay = (float)atof(s.c_str()) * (s.find("ms") != std::string::npos ? 0.001f : 1.f);
+      return true;
+    }
+    if (prop == "animation-iteration-count") {
+      std::string s = lc(trim(v));
+      if (s == "infinite") cs->anim_infinite = true;
+      else cs->anim_iterations = atoi(s.c_str());
+      return true;
+    }
+    if (prop == "animation-timing-function") { cs->anim_timing = lc(trim(v)); return true; }
+    if (prop == "animation") {
+      /* shorthand: name duration timing-function delay iteration-count ... */
+      std::vector<std::string> toks;
+      split_values(v, &toks);
+      int times = 0;
+      for (auto& tk : toks) {
+        std::string s = lc(trim(tk));
+        if (s == "infinite") { cs->anim_infinite = true; continue; }
+        bool numeric = !s.empty() && (isdigit((unsigned char)s[0]) || s[0] == '.');
+        if (numeric && (s.back() == 's' || s.find("ms") == s.size() - 2)) {
+          float val = (float)atof(s.c_str()) * (s.find("ms") == s.size() - 2 ? 0.001f : 1.f);
+          if (times == 0) cs->anim_duration = val;
+          else if (times == 1) cs->anim_delay = val;
+          times++;
+          continue;
+        }
+        if (s == "linear" || s == "ease" || s == "ease-in" || s == "ease-out" ||
+            s == "ease-in-out" || s == "step-start" || s == "step-end") {
+          cs->anim_timing = s;
+          continue;
+        }
+        if (numeric) { cs->anim_iterations = atoi(s.c_str()); continue; }
+        if (cs->anim_name.empty()) cs->anim_name = tk;
+      }
+      return true;
+    }
+    return true; /* animation-direction / fill-mode / play-state: consumed */
+  }
   if (prop == "list-style-type") { cs->list_style = lc(v) == "none" ? 0 : 1; return true; }
   if (prop == "list-style") { cs->list_style = lc(v).find("none") != std::string::npos ? 0 : 1; return true; }
   /* ignored-but-consumed properties (animations, transitions, cursor, will-change, etc.) */
   static const char* kIgnored[] = {
     "transition", "transition-property", "transition-duration", "transition-timing-function",
-    "transition-delay", "animation", "animation-name", "animation-duration", "animation-timing-function",
-    "animation-delay", "animation-iteration-count", "animation-direction", "animation-fill-mode",
-    "animation-play-state", "cursor", "will-change", "pointer-events", "user-select", "touch-action",
+    "transition-delay", "cursor", "will-change", "pointer-events", "user-select", "touch-action",
     "outline", "outline-width", "outline-style", "outline-color", "outline-offset", "resize",
     "scroll-behavior", "scroll-snap-type", "scroll-margin", "scroll-padding", "visibility",
     "unicode-bidi", "direction", "quotes", "counter-reset", "counter-increment", "tab-size",
@@ -1700,6 +1884,82 @@ void style_tree(Document* doc, int vw, int vh) {
   }
 }
 
+/* ---- animation evaluation ---- */
+static float anim_time_s() {
+  using clock = std::chrono::steady_clock;
+  static clock::time_point base = clock::now();
+  return std::chrono::duration<float>(clock::now() - base).count();
+}
+
+static float anim_ease(const std::string& tf, float t) {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  if (tf == "ease-in-out") return t * t * (3 - 2 * t);
+  if (tf == "ease-in") return t * t;
+  if (tf == "ease-out") return 1 - (1 - t) * (1 - t);
+  if (tf == "ease") return t < 0.5f ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t);
+  return t; /* linear, steps (approximated) */
+}
+
+/* apply the keyframe-animated values for `cs` at the current time */
+static void evaluate_animation(ComputedStyle* cs, const StyleSheet& sheet, ResolveCtx& rc) {
+  if (cs->anim_name.empty() || cs->anim_duration <= 0) return;
+  const KeyframesRule* kr = nullptr;
+  for (auto& k : sheet.keyframes)
+    if (k.name == cs->anim_name) { kr = &k; break; }
+  if (!kr || kr->steps.size() < 2) return;
+
+  float t = anim_time_s() - cs->anim_delay;
+  if (t < 0) t = 0;
+  float prog;
+  if (cs->anim_infinite) {
+    prog = fmodf(t, cs->anim_duration) / cs->anim_duration;
+  } else {
+    prog = t / cs->anim_duration;
+    if (prog > 1) prog = 1;
+  }
+  float pct = prog * 100.f;
+
+  /* gather per-property (pct, value) lists */
+  std::vector<std::string> props;
+  for (auto& st : kr->steps)
+    for (auto& d : st.second)
+      if (std::find(props.begin(), props.end(), d.prop) == props.end()) props.push_back(d.prop);
+
+  for (auto& prop : props) {
+    /* bracketing steps for this property */
+    float lo_p = -1, hi_p = -1;
+    std::string lo_v, hi_v;
+    for (auto& st : kr->steps) {
+      for (auto& d : st.second) {
+        if (d.prop != prop) continue;
+        if (st.first <= pct && st.first >= lo_p) { lo_p = st.first; lo_v = d.value; }
+        if (st.first > pct && (hi_p < 0 || st.first < hi_p)) { hi_p = st.first; hi_v = d.value; }
+      }
+    }
+    if (lo_p < 0) continue;
+    std::string val;
+    if (hi_p < 0) {
+      val = lo_v; /* past the last keyframe */
+    } else {
+      /* interpolate when both sides resolve to the same length unit */
+      Length L1, L2;
+      parse_length(substitute_vars(lo_v, rc), &L1, rc);
+      parse_length(substitute_vars(hi_v, rc), &L2, rc);
+      float f = anim_ease(cs->anim_timing, (pct - lo_p) / (hi_p - lo_p));
+      if (L1.unit == L2.unit && (L1.unit == L_PX || L1.unit == L_PCT)) {
+        float v = L1.val + (L2.val - L1.val) * f;
+        char buf[64];
+        snprintf(buf, sizeof(buf), L1.unit == L_PX ? "%.2fpx" : "%.2f%%", v);
+        val = buf;
+      } else {
+        val = f >= 1 ? hi_v : lo_v; /* non-interpolable: step */
+      }
+    }
+    apply_declaration(cs, prop, val, rc, nullptr);
+  }
+}
+
 static void compute_style_for(Node* el, const ComputedStyle* parent, const CustomProps* parent_vars,
                               const StyleSheet& sheet, float rem, int vw, int vh) {
   /* clear old */
@@ -1740,6 +2000,8 @@ static void compute_style_for(Node* el, const ComputedStyle* parent, const Custo
   rc.vars = &own_vars;
   rc.rem = rem;
   rc.em = cs->font_size;
+  rc.vw = (float)vw;
+  rc.vh = (float)vh;
   rc.current_color = cs->color;
   for (auto& p : pending) {
     if (starts_with(*p.prop, "--")) apply_declaration(cs, *p.prop, *p.val, rc, &own_vars);
@@ -1780,6 +2042,9 @@ static void compute_style_for(Node* el, const ComputedStyle* parent, const Custo
     }
   }
 
+  /* animations (evaluated after all declarations are in) */
+  evaluate_animation(cs, sheet, rc);
+
   /* elements hidden by UA (head/script/...) handled via UA display:none */
   el->needs_style = false;
 
@@ -1814,6 +2079,7 @@ static void compute_style_for(Node* el, const ComputedStyle* parent, const Custo
       if (*p.prop == "content") continue;
       apply_declaration(pcs, *p.prop, *p.val, rc2, nullptr);
     }
+    evaluate_animation(pcs, sheet, rc2);
     pcs->pseudo_before = pe == 0;
     pcs->pseudo_after = pe == 1;
     if (el->pseudo[pe]) delete el->pseudo[pe];
@@ -1826,4 +2092,11 @@ static void compute_style_for(Node* el, const ComputedStyle* parent, const Custo
   }
 }
 
+
+/* simplified entry point used by the scrollbar rule parser (square_css.cpp) */
+bool parse_css_color(const std::string& raw, Color* out) {
+  ResolveCtx rc;
+  rc.current_color = Color{255, 0, 0, 0};
+  return parse_css_color(raw, rc, out);
+}
 } /* namespace sqrl */

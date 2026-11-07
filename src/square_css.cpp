@@ -117,8 +117,10 @@ static void parse_compound(const std::string& comp, SelPart* part) {
         i++;
       }
       if (name == "before" || name == "after" || name == "first-line" || name == "first-letter" ||
-          name == "placeholder" || name == "marker" || name == "selection") {
-        if (name == "before" || name == "after") part->pseudo_element = name;
+          name == "placeholder" || name == "marker" || name == "selection" ||
+          starts_with(name, "webkit-scrollbar")) {
+        if (name == "before" || name == "after" || starts_with(name, "webkit-scrollbar"))
+          part->pseudo_element = name;
       } else {
         if (!arg.empty()) name += "(" + arg + ")";
         part->pseudo_classes.push_back(name);
@@ -287,6 +289,10 @@ void parse_declarations(const std::string& body, std::vector<Declaration>* out) 
   }
 }
 
+static void apply_scrollbar_rule(const std::string& pe, const std::vector<Declaration>& decls,
+                                 const std::vector<std::string>& pseudo_classes,
+                                 ScrollbarStyle* sb);
+
 void css_parse_stylesheet(const std::string& css, StyleSheet* out, int vw, int vh) {
   CssCursor c(css);
   int order = (int)out->rules.size();
@@ -393,7 +399,48 @@ void css_parse_stylesheet(const std::string& css, StyleSheet* out, int vw, int v
           }
         }
         if (!ff.family.empty()) out->fontfaces.push_back(ff);
-      } else if (name == "keyframes" || name == "import" || name == "charset" || name == "property" || name == "scope") {
+      } else if (name == "keyframes" || starts_with(name, "-webkit-keyframes") ||
+                 name == "import" || name == "charset" || name == "property" || name == "scope") {
+        if (name == "keyframes" || starts_with(name, "-webkit-keyframes")) {
+          /* @keyframes name { 0% { .. } 50% { .. } to { .. } } */
+          c.ws();
+          std::string prelude = c.read_until_chars("{");
+          if (c.peek() != '{') { c.skip_until_char('}'); if (c.peek() == '}') c.i++; continue; }
+          c.i++; /* consume { */
+          KeyframesRule kr;
+          {
+            std::string nm = trim(prelude);
+            size_t sp = nm.rfind(' ');
+            kr.name = sp == std::string::npos ? nm : nm.substr(sp + 1);
+          }
+          while (!c.eof()) {
+            c.ws();
+            if (c.peek() == '}') { c.i++; break; }
+            std::string stepsel = c.read_until_chars("{");
+            if (c.peek() != '{') break;
+            c.i++;
+            size_t start = c.i;
+            int depth = 1;
+            while (c.i < css.size() && depth > 0) {
+              if (css[c.i] == '{') depth++;
+              else if (css[c.i] == '}') depth--;
+              if (depth > 0) c.i++;
+            }
+            std::string body = css.substr(start, c.i - start);
+            if (c.i < css.size()) c.i++; /* consume } */
+            std::string s2 = lc(trim(stepsel));
+            float pct;
+            if (s2 == "from") pct = 0;
+            else if (s2 == "to") pct = 100;
+            else pct = (float)atof(s2.c_str()); /* "50%" -> 50 */
+            std::vector<Declaration> decls;
+            parse_declarations(body, &decls);
+            kr.steps.push_back({pct, decls});
+          }
+          out->keyframes.push_back(kr);
+          out->has_animations = true;
+          continue;
+        }
         if (name == "import") {
           c.ws();
           std::string prelude = c.read_until_chars(";");
@@ -470,6 +517,35 @@ void css_parse_stylesheet(const std::string& css, StyleSheet* out, int vw, int v
     }
     if (rule.sels.empty()) continue;
     parse_declarations(body, &rule.decls);
+    /* ::-webkit-scrollbar* rules configure the page scrollbar */
+    const std::string& pe = rule.sels[0].parts.back().pseudo_element;
+    if (starts_with(pe, "webkit-scrollbar")) {
+      apply_scrollbar_rule(pe, rule.decls,
+                           rule.sels[0].parts.back().pseudo_classes, &out->sbstyle);
+      continue;
+    }
+    /* firefox-style scrollbar-width / scrollbar-color on any selector */
+    for (auto& dcl : rule.decls) {
+      if (dcl.prop == "scrollbar-width") {
+        std::string v = lc(trim(dcl.value));
+        if (v == "thin") { out->sbstyle.width = 8; out->sbstyle.radius = 0; }
+        else if (v == "none") out->sbstyle.width = 0;
+        else if (v == "auto") { out->sbstyle.width = 14; }
+      } else if (dcl.prop == "scrollbar-color") {
+        /* split "thumb track" on whitespace (top-level) */
+        std::vector<std::string> cols;
+        std::string cur;
+        for (char c : dcl.value) {
+          if (isspace((unsigned char)c)) {
+            if (!trim(cur).empty()) { cols.push_back(trim(cur)); cur.clear(); }
+          } else cur += c;
+        }
+        if (!trim(cur).empty()) cols.push_back(trim(cur));
+        Color c1, c2;
+        if (cols.size() >= 1 && parse_css_color(cols[0], &c1)) out->sbstyle.thumb = c1;
+        if (cols.size() >= 2 && parse_css_color(cols[1], &c2)) out->sbstyle.track = c2;
+      }
+    }
     static bool dbg_all = getenv("SQRL_DBG_RULES_ALL") != nullptr;
     if ((getenv("SQRL_DBG_RULES") && sel_text.find("grid-cols") != std::string::npos) ||
         (dbg_all && sel_text.find(' ') != std::string::npos)) {
@@ -691,5 +767,54 @@ bool selector_matches(const Node* el, const Selector& sel) {
     idx--;
   }
   return true;
+}
+
+/* ============================ scrollbar styling ============================ */
+/* apply one ::-webkit-scrollbar* rule to the document's scrollbar style */
+static void apply_scrollbar_rule(const std::string& pe, const std::vector<Declaration>& decls,
+                                 const std::vector<std::string>& pseudo_classes,
+                                 ScrollbarStyle* sb) {
+  bool hover = false;
+  for (auto& pc : pseudo_classes) if (pc == "hover") hover = true;
+  for (auto& dcl : decls) {
+    std::string v = trim(dcl.value);
+    if (pe == "webkit-scrollbar") {
+      if (dcl.prop == "width") {
+        float w = (float)atof(v.c_str());
+        if (!v.empty() && v.back() == 'x' && w > 0) sb->width = w;
+        else if (v == "none") sb->width = 0;
+      }
+    } else if (pe == "webkit-scrollbar-track") {
+      Color c;
+      if ((dcl.prop == "background" || dcl.prop == "background-color") && parse_css_color(v, &c))
+        sb->track = c;
+    } else if (pe == "webkit-scrollbar-thumb") {
+      Color c;
+      if ((dcl.prop == "background" || dcl.prop == "background-color") && parse_css_color(v, &c)) {
+        if (hover) sb->thumb_hover = c;
+        else sb->thumb = c;
+      } else if (dcl.prop == "border-radius") {
+        float r = (float)atof(v.c_str());
+        if (hover) { /* hover radius not tracked separately */ }
+        else sb->radius = r;
+      } else if (dcl.prop == "border") {
+        /* "2px solid #1a1a1a" */
+        std::vector<std::string> toks;
+        std::string cur;
+        for (char c : v) {
+          if (isspace((unsigned char)c)) { if (!trim(cur).empty()) { toks.push_back(trim(cur)); cur.clear(); } }
+          else cur += c;
+        }
+        if (!trim(cur).empty()) toks.push_back(trim(cur));
+        Color bc;
+        for (auto& tk : toks) {
+          float bw = (float)atof(tk.c_str());
+          if (!tk.empty() && (isdigit((unsigned char)tk[0]) || tk[0] == '.') && bw > 0 && sb->thumb_border == 0)
+            sb->thumb_border = bw;
+          else if (parse_css_color(tk, &bc)) sb->thumb_border_color = bc;
+        }
+      }
+    }
+  }
 }
 } /* namespace sqrl */

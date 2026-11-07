@@ -17,6 +17,10 @@
 #include <string>
 #include <vector>
 
+#ifndef GET_WHEEL_DELTA_WPARAM
+#  define GET_WHEEL_DELTA_WPARAM(w) ((short)HIWORD(w))
+#endif
+
 #define TOOLBAR_H 40
 #define IDC_ADDRESS 1001
 #define IDC_GO 1002
@@ -33,6 +37,8 @@ struct BrowserUI {
   square_instance* inst = nullptr;
   int last_state = -1;
   int last_repaint_tick = 0;
+  int scroll_y = 0;
+  bool drag_sb = false;
 };
 
 static BrowserUI g_ui;
@@ -151,14 +157,58 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       InvalidateRect(hwnd, &rc, FALSE);
       return 0;
     }
+    case WM_MOUSEWHEEL: {
+      POINT pt = {(short)LOWORD(lp), (short)HIWORD(lp)};
+      ScreenToClient(hwnd, &pt);
+      if (pt.y < TOOLBAR_H) return 0; /* over the toolbar: nothing to scroll */
+      int delta = (int)GET_WHEEL_DELTA_WPARAM(wp);
+      int pw = 0, ph = 0;
+      square_get_page_size(g_ui.inst, &pw, &ph);
+      int scroll_max = ph - g_ui.vh;
+      if (scroll_max < 0) scroll_max = 0;
+      g_ui.scroll_y -= delta; /* wheel up = scroll up */
+      if (g_ui.scroll_y < 0) g_ui.scroll_y = 0;
+      if (g_ui.scroll_y > scroll_max) g_ui.scroll_y = scroll_max;
+      square_set_scroll(g_ui.inst, g_ui.scroll_y);
+      RECT rc = {0, TOOLBAR_H, g_ui.vw, TOOLBAR_H + g_ui.vh};
+      InvalidateRect(hwnd, &rc, FALSE);
+      return 0;
+    }
     case WM_MOUSEMOVE: {
       float x = (float)(short)LOWORD(lp), y = (float)(short)HIWORD(lp);
+      if (g_ui.drag_sb) {
+        square_scrollbar_drag(g_ui.inst, (int)(y - TOOLBAR_H));
+        RECT rc = {0, TOOLBAR_H, g_ui.vw, TOOLBAR_H + g_ui.vh};
+        InvalidateRect(hwnd, &rc, FALSE);
+        return 0;
+      }
       if (y >= TOOLBAR_H) square_send_mouse_move(g_ui.inst, x, y - TOOLBAR_H);
       return 0;
     }
+    case WM_LBUTTONDOWN: {
+      float x = (float)(short)LOWORD(lp), y = (float)(short)HIWORD(lp);
+      if (y >= TOOLBAR_H && square_scrollbar_hit(g_ui.inst, (int)x)) {
+        SetFocus(hwnd);
+        SetCapture(hwnd);
+        g_ui.drag_sb = true;
+        square_scrollbar_drag(g_ui.inst, (int)(y - TOOLBAR_H));
+        RECT rc = {0, TOOLBAR_H, g_ui.vw, TOOLBAR_H + g_ui.vh};
+        InvalidateRect(hwnd, &rc, FALSE);
+        return 0;
+      }
+      break; /* normal page click: handled on WM_LBUTTONUP */
+    }
     case WM_LBUTTONUP: {
       float x = (float)(short)LOWORD(lp), y = (float)(short)HIWORD(lp);
-      if (y >= TOOLBAR_H) square_send_click(g_ui.inst, x, y - TOOLBAR_H, 0);
+      if (g_ui.drag_sb) {
+        g_ui.drag_sb = false;
+        ReleaseCapture();
+        return 0; /* end of scrollbar drag, not a page click */
+      }
+      if (y >= TOOLBAR_H) {
+        SetFocus(hwnd); /* wheel events go to the focused window */
+        square_send_click(g_ui.inst, x, y - TOOLBAR_H, 0);
+      }
       return 0;
     }
     case WM_COMMAND: {

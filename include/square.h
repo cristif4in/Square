@@ -100,6 +100,16 @@ SQRL_API int         square_get_page_size(square_instance* inst, int* out_w, int
  * Returns 1 on success, 0 when nothing has been parsed yet. */
 SQRL_API int  square_render_bgra(square_instance* inst, uint8_t* dst,
                                  int dst_stride_bytes, int dst_h_px);
+/* Scroll the viewport. y is in page pixels, clamped to [0, page_height - viewport_height].
+ * Repaints the frame only (no relayout) — cheap enough for wheel events. */
+SQRL_API void square_set_scroll(square_instance* inst, int y);
+SQRL_API int  square_get_scroll(square_instance* inst); /* current scroll offset */
+/* Scrollbar interaction (appearance is drawn by the engine, CSS-customizable
+ * via ::-webkit-scrollbar-* and scrollbar-width/scrollbar-color).
+ * square_scrollbar_hit: 1 when viewport x is over the scrollbar.
+ * square_scrollbar_drag: place the thumb center at viewport y (returns scroll). */
+SQRL_API int  square_scrollbar_hit(square_instance* inst, int viewport_x);
+SQRL_API int  square_scrollbar_drag(square_instance* inst, int viewport_y);
 /* Save a PNG. full_page=0 -> viewport, 1 -> whole document height.
  * Returns 1 on success. */
 SQRL_API int  square_save_png(square_instance* inst, const char* path,

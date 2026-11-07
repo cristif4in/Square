@@ -20,10 +20,12 @@ esac
 PIC=""; [ "$WINDOWS" = "0" ] && PIC="-fPIC"
 
 echo "[1/6] QuickJS (C)"
+pids=""
 for f in quickjs libregexp libunicode cutils dtoa; do
   $CC -c -O2 $PIC -I$QJS -D_GNU_SOURCE -DCONFIG_VERSION="\"$QVER\"" $QJS/$f.c -o $OUT/qjs_$f.o &
+  pids="$pids $!"
 done
-wait
+for p in $pids; do wait $p; done
 
 echo "[2/6] Embedded fonts"
 $CC -c -O2 $PIC thirdparty/fonts_embed.c -o $OUT/fonts_embed.o
@@ -48,9 +50,10 @@ done
 N=0
 for f in $WP_SRCS; do
   $CC -c -O2 $PIC -I$WEBP -I$WEBP/src -Wno-unused-function -Wno-unused-variable -Wno-attributes -Wno-sign-compare $f -o $OUT/webp/$(basename $f .c).o &
-  N=$((N+1)); if [ $((N % 16)) -eq 0 ]; then wait; fi
+  pids="$pids $!"
+  N=$((N+1)); if [ $((N % 16)) -eq 0 ]; then for p in $pids; do wait $p; done; pids=""; fi
 done
-wait
+for p in $pids; do wait $p; done
 
 echo "[5/6] Engine modules (C++)"
 CXXFLAGS="-std=c++17 -O2 -fPIC -Wall -Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable -DSQUARE_BUILD_DLL -Iinclude -Isrc -Ithirdparty -I$WEBP/src"
@@ -58,10 +61,12 @@ if [ "$WINDOWS" = "1" ]; then
   # engine includes <zlib.h> → use the vendored zlib headers
   CXXFLAGS="$CXXFLAGS -I$ZLIB"
 fi
+pids=""
 for f in square_content square_css square_style square_layout square_gfx square_net square_platform square_platform_api; do
   $CXX -c $CXXFLAGS src/$f.cpp -o $OUT/$f.o &
+  pids="$pids $!"
 done
-wait
+for p in $pids; do wait $p; done
 
 echo "[6/6] Link"
 if [ "$WINDOWS" = "1" ]; then

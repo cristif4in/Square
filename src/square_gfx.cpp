@@ -112,9 +112,11 @@ static void clamp_radii(const float in[4], float w, float h, float out[4]) {
   for (int i = 0; i < 4; i++) {
     float v = in[i];
     if (v < 0) v = 0;
-    if (v > w / 2) v = w / 2;
+    v *= k;                    /* scale adjacent-sum overflow first... */
+    if (v > w / 2) v = w / 2;  /* ...then clamp to half extents (order matters:
+                                * clamping first double-shrinks 999px radii) */
     if (v > h / 2) v = h / 2;
-    out[i] = v * k;
+    out[i] = v;
   }
 }
 
@@ -1992,9 +1994,14 @@ Surface* svg_render(const std::string& svg_text, float w, float h, Color current
   /* content transform: viewBox → surface with xMidYMid meet */
   SvgPaintState ps;
   ps.grad_id = "";
-  ps.st.fill = Color{0, 0, 0, 255};
+  /* Color field order is {a,r,g,b}: {0,0,0,255} here was accidentally
+   * TRANSPARENT — SVG default fill must be opaque black */
+  ps.st.fill = Color{255, 0, 0, 0};
   ps.st.stroke = Color{0, 0, 0, 0};
   ps.st.color = current_color;
+  /* presentation attributes on the root <svg> element (fill="...", color=...)
+   * are inherited by everything inside it */
+  apply_paint_attrs(svg, &ps, &ctx, nullptr);
   if (has_vb) {
     float scale = std::min(sw / vbw, sh / vbh);
     ctx.scale = scale;
