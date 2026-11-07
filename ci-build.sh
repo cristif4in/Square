@@ -52,7 +52,7 @@ done
 wait
 
 echo "[5/6] Engine modules (C++)"
-CXXFLAGS="-std=c++17 -O2 -Wall -Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable -DSQUARE_BUILD_DLL -Iinclude -Isrc -Ithirdparty -I$WEBP/src"
+CXXFLAGS="-std=c++17 -O2 -fPIC -Wall -Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable -DSQUARE_BUILD_DLL -Iinclude -Isrc -Ithirdparty -I$WEBP/src"
 if [ "$WINDOWS" = "1" ]; then
   # engine includes <zlib.h> → use the vendored zlib headers
   CXXFLAGS="$CXXFLAGS -I$ZLIB"
