@@ -1937,7 +1937,11 @@ static void evaluate_animation(ComputedStyle* cs, const StyleSheet& sheet, Resol
         if (st.first > pct && (hi_p < 0 || st.first < hi_p)) { hi_p = st.first; hi_v = d.value; }
       }
     }
-    if (lo_p < 0) continue;
+    if (lo_p < 0) {
+      /* only a `to` step: CSS implies from = the current (identity) value */
+      if (prop == "transform" && hi_p >= 0) { lo_p = 0; lo_v = "translateX(0%)"; }
+      else continue;
+    }
     std::string val;
     if (hi_p < 0) {
       val = lo_v; /* past the last keyframe */
@@ -1952,6 +1956,16 @@ static void evaluate_animation(ComputedStyle* cs, const StyleSheet& sheet, Resol
         char buf[64];
         snprintf(buf, sizeof(buf), L1.unit == L_PX ? "%.2fpx" : "%.2f%%", v);
         val = buf;
+      } else if (prop == "transform") {
+        /* interpolate translateX(<n>%) between keyframes */
+        auto txpct = [](const std::string& v) -> float {
+          size_t p = v.find("translateX");
+          if (p == std::string::npos) return 0;
+          return (float)atof(v.c_str() + p + 10);
+        };
+        cs->anim_tx = true;
+        cs->anim_tx_pct = txpct(lo_v) + (txpct(hi_v) - txpct(lo_v)) * f;
+        return; /* transform handled, no declaration re-apply */
       } else {
         val = f >= 1 ? hi_v : lo_v; /* non-interpolable: step */
       }
@@ -2098,5 +2112,36 @@ bool parse_css_color(const std::string& raw, Color* out) {
   ResolveCtx rc;
   rc.current_color = Color{255, 0, 0, 0};
   return parse_css_color(raw, rc, out);
+}
+
+/* animation-only pass: walk the tree and re-apply keyframe values */
+void style_reanimate(Document* doc, int vw, int vh) {
+  if (!doc || !doc->root || doc->sheet.keyframes.empty()) return;
+  std::function<void(Node*)> walk = [&](Node* n) {
+    if (n->cs) {
+      ResolveCtx rc;
+      rc.vars = &doc->root_vars;
+      rc.em = n->cs->font_size;
+      rc.rem = doc->root_font_size;
+      rc.vw = (float)vw;
+      rc.vh = (float)vh;
+      rc.current_color = n->cs->color;
+      evaluate_animation(n->cs, doc->sheet, rc);
+    }
+    for (int pe = 0; pe < 2; pe++) {
+      if (n->pseudo[pe]) {
+        ResolveCtx rc;
+        rc.vars = &doc->root_vars;
+        rc.em = n->pseudo[pe]->font_size;
+        rc.rem = doc->root_font_size;
+        rc.vw = (float)vw;
+        rc.vh = (float)vh;
+        rc.current_color = n->pseudo[pe]->color;
+        evaluate_animation(n->pseudo[pe], doc->sheet, rc);
+      }
+    }
+    for (Node* c : n->children) walk(c);
+  };
+  walk(doc->root);
 }
 } /* namespace sqrl */

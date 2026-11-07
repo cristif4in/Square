@@ -747,6 +747,11 @@ static float measure_max_content_width(Node* el, LayoutCtx& lc) {
  * Used as the flex-shrink floor (CSS min-width:auto on flex items). */
 static float measure_text_min_width(Node* t, ComputedStyle* cs, LayoutCtx& lc) {
   const std::string& s = t->data;
+  /* white-space:nowrap — the smallest the text can get is the whole line */
+  if (cs->white_space == WS_NOWRAP) {
+    void* f = font_for(cs);
+    return f ? font_measure_text(f, s.c_str(), cs->letter_spacing) : 0;
+  }
   float worst = 0;
   std::string word;
   auto flush_word = [&]() {
@@ -887,7 +892,12 @@ static float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
       inline_group.push_back(c);
       continue;
     }
-    if (is_blocky(ccs->display)) {
+    bool atomic_non_media = is_atomic_inline(ccs->display) && c->tag != "img" && c->tag != "svg" &&
+                            c->tag != "video" && c->tag != "canvas" && c->tag != "iframe";
+    if (is_blocky(ccs->display) || atomic_non_media) {
+      /* inline-flex/-block/-grid containers in block flow are laid out as
+       * block boxes: the inline replaced-item path corrupts the heap when
+       * they have element children (e.g. a ticker track with spans) */
       flush_inline_group();
       /* margins */
       float em = ccs->font_size;
@@ -1616,6 +1626,12 @@ static float layout_element(Box* b, Node* el, LayoutCtx& lc) {
 
   b->ch = content_h;
   b->h = content_h + b->pad_t + b->pad_b + b->bor_t + b->bor_b;
+  /* animated translateX (ticker-style keyframes): shift by pct of own width */
+  if (cs->anim_tx) {
+    float m[6] = {1, 0, 0, 1, cs->anim_tx_pct / 100.f * b->w, 0};
+    memcpy(cs->mat, m, sizeof(m));
+    cs->has_transform = true;
+  }
   layout_out_of_flow_children(b, el, lc);
   return b->h;
 }

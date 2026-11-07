@@ -329,6 +329,8 @@ struct ComputedStyle {
   /* animation (subset: name/duration/delay/timing/iterations) */
   std::string anim_name;
   std::string anim_timing = "linear";
+  bool anim_tx = false;          /* animated transform: translateX(pct% of width) */
+  float anim_tx_pct = 0;
   float anim_duration = 0, anim_delay = 0;
   bool anim_infinite = false;
   int anim_iterations = 1;
@@ -567,6 +569,9 @@ void offset_box_recursive(Box* b, float dx, float dy);
 /* paint whole document into surface */
 void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images,
                     float scroll_y = 0);
+/* animation-only style update: re-evaluates keyframe values on the existing
+ * computed styles WITHOUT the full selector cascade (cheap enough per frame) */
+void style_reanimate(Document* doc, int vw, int vh);
 /* scrollbar geometry shared by the painter and the drag API: returns the
  * effective scrollbar width (0 = hidden/not scrollable); fills thumb_y /
  * thumb_h (track coords, track spans 0..viewport_h) when the page scrolls */
