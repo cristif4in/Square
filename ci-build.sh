@@ -65,7 +65,7 @@ if [ "$WINDOWS" = "1" ]; then
   CXXFLAGS="$CXXFLAGS -I$ZLIB"
 fi
 pids=""
-for f in square_content square_css square_style square_layout_common square_layout_inline square_layout_block square_layout_flex square_layout_grid square_layout_paint square_gfx square_net square_platform square_platform_api; do
+for f in square_content square_css square_style square_layout_common square_layout_inline square_layout_block square_layout_flex square_layout_grid square_layout_paint square_css_selectors square_css_values square_font square_image square_svg square_gfx square_net square_platform square_platform_api; do
   $CXX -c $CXXFLAGS src/$f.cpp -o $OUT/$f.o &
   pids="$pids $!"
 done
@@ -75,7 +75,7 @@ echo "[6/6] Link"
 if [ "$WINDOWS" = "1" ]; then
   $CXX -shared -o $OUT/square.dll \
     $OUT/qjs_*.o $OUT/fonts_embed.o $OUT/z/*.o $OUT/webp/*.o \
-    $OUT/square_css.o $OUT/square_style.o $OUT/square_content.o $OUT/square_layout_common.o $OUT/square_layout_inline.o $OUT/square_layout_block.o $OUT/square_layout_flex.o $OUT/square_layout_grid.o $OUT/square_layout_paint.o $OUT/square_gfx.o \
+    $OUT/square_css.o $OUT/square_style.o $OUT/square_content.o $OUT/square_layout_common.o $OUT/square_layout_inline.o $OUT/square_layout_block.o $OUT/square_layout_flex.o $OUT/square_layout_grid.o $OUT/square_layout_paint.o $OUT/square_css_selectors.o $OUT/square_css_values.o $OUT/square_font.o $OUT/square_image.o $OUT/square_svg.o $OUT/square_gfx.o \
     $OUT/square_net.o $OUT/square_platform.o $OUT/square_platform_api.o \
     -static -Wl,--out-implib,$OUT/libsquare.a \
     -lpthread -lm -lws2_32 -lsecur32 -lcrypt32 -ladvapi32
@@ -89,7 +89,7 @@ if [ "$WINDOWS" = "1" ]; then
 else
   $CXX -shared -o $OUT/libsquare.so \
     $OUT/qjs_*.o $OUT/fonts_embed.o $OUT/webp/*.o \
-    $OUT/square_css.o $OUT/square_style.o $OUT/square_content.o $OUT/square_layout_common.o $OUT/square_layout_inline.o $OUT/square_layout_block.o $OUT/square_layout_flex.o $OUT/square_layout_grid.o $OUT/square_layout_paint.o $OUT/square_gfx.o \
+    $OUT/square_css.o $OUT/square_style.o $OUT/square_content.o $OUT/square_layout_common.o $OUT/square_layout_inline.o $OUT/square_layout_block.o $OUT/square_layout_flex.o $OUT/square_layout_grid.o $OUT/square_layout_paint.o $OUT/square_css_selectors.o $OUT/square_css_values.o $OUT/square_font.o $OUT/square_image.o $OUT/square_svg.o $OUT/square_gfx.o \
     $OUT/square_net.o $OUT/square_platform.o $OUT/square_platform_api.o \
     -lz -lssl -lcrypto -lpthread -ldl -lm
   if [ -f test/engine_main.cpp ]; then
