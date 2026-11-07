@@ -25,17 +25,19 @@ for f in quickjs libregexp libunicode cutils dtoa; do
   $CC -c -O2 $PIC -I$QJS -D_GNU_SOURCE -DCONFIG_VERSION="\"$QVER\"" $QJS/$f.c -o $OUT/qjs_$f.o &
   pids="$pids $!"
 done
-for p in $pids; do wait $p; done
+for p in $pids; do wait $p || exit $?; done
 
 echo "[2/6] Embedded fonts"
 $CC -c -O2 $PIC thirdparty/fonts_embed.c -o $OUT/fonts_embed.o
 
 if [ "$WINDOWS" = "1" ]; then
   echo "[3/6] zlib (vendored)"
+  pids=""
   for f in adler32 crc32 inflate inffast inftrees zutil deflate trees; do
     $CC -c -O2 $PIC -I$ZLIB $ZLIB/$f.c -o $OUT/z/$f.o &
+    pids="$pids $!"
   done
-  wait
+  for p in $pids; do wait $p || exit $?; done
 else
   echo "[3/6] zlib (system)"
 fi
@@ -48,12 +50,13 @@ for f in $WEBP/src/dec/*.c $WEBP/src/utils/*.c $WEBP/src/dsp/*.c; do
   WP_SRCS="$WP_SRCS $f"
 done
 N=0
+pids=""
 for f in $WP_SRCS; do
   $CC -c -O2 $PIC -I$WEBP -I$WEBP/src -Wno-unused-function -Wno-unused-variable -Wno-attributes -Wno-sign-compare $f -o $OUT/webp/$(basename $f .c).o &
   pids="$pids $!"
-  N=$((N+1)); if [ $((N % 16)) -eq 0 ]; then for p in $pids; do wait $p; done; pids=""; fi
+  N=$((N+1)); if [ $((N % 16)) -eq 0 ]; then for p in $pids; do wait $p || exit $?; done; pids=""; fi
 done
-for p in $pids; do wait $p; done
+for p in $pids; do wait $p || exit $?; done
 
 echo "[5/6] Engine modules (C++)"
 CXXFLAGS="-std=c++17 -O2 -fPIC -Wall -Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable -DSQUARE_BUILD_DLL -Iinclude -Isrc -Ithirdparty -I$WEBP/src"
@@ -66,7 +69,7 @@ for f in square_content square_css square_style square_layout square_gfx square_
   $CXX -c $CXXFLAGS src/$f.cpp -o $OUT/$f.o &
   pids="$pids $!"
 done
-for p in $pids; do wait $p; done
+for p in $pids; do wait $p || exit $?; done
 
 echo "[6/6] Link"
 if [ "$WINDOWS" = "1" ]; then
