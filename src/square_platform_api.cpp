@@ -498,10 +498,34 @@ static void navigate_begin(Instance* inst, const std::function<void()>& start) {
   }).detach();
 }
 
+static std::string normalize_input_url(const std::string& raw) {
+  size_t b = raw.find_first_not_of(" \t\r\n");
+  if (b == std::string::npos) return raw;
+  size_t e = raw.find_last_not_of(" \t\r\n");
+  std::string u = raw.substr(b, e - b + 1);
+  std::string lower;
+  for (char c : u) lower.push_back((char)tolower((unsigned char)c));
+  if (lower.rfind("http://", 0) == 0 || lower.rfind("https://", 0) == 0 ||
+      lower.rfind("file://", 0) == 0 || lower.rfind("data:", 0) == 0 ||
+      lower.rfind("about:", 0) == 0 || lower.rfind("blob:", 0) == 0 ||
+      lower.rfind("javascript:", 0) == 0)
+    return u;
+  size_t host_end = lower.find_first_of(":/?#");
+  std::string host_lower = lower.substr(0, host_end == std::string::npos ? lower.size() : host_end);
+  bool digits_only = !host_lower.empty();
+  for (char c : host_lower)
+    if (c != '.' && (c < '0' || c > '9')) { digits_only = false; break; }
+  if (digits_only || host_lower == "localhost" ||
+      host_lower.rfind("localhost:", 0) == 0)
+    return "http://" + u;
+  if (host_lower.rfind("www.", 0) == 0) return "https://" + u;
+  return "https://www." + u;
+}
+
 void square_load_url(square_instance* p, const char* url) {
   Instance* inst = as_inst(p);
   if (!inst || !url) return;
-  std::string u = url;
+  std::string u = normalize_input_url(url);
   navigate_begin(inst, [inst, u]() {
     run_with_big_stack([inst, u]() { page_thread_entry(inst, u, false); }, inst->page_thread);
   });

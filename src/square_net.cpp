@@ -935,8 +935,7 @@ struct SchannelStream {
 
 /* ============================ HTTP/2 (RFC 7540/7541) ============================ */
 static const char* kDefaultUA =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36 SquareEngine/1.0";
+    "Square/1.0 (cristif4in)";
 
 #include "square_h2.h"
 

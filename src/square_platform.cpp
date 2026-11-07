@@ -11,8 +11,15 @@
 #include <condition_variable>
 #include <cctype>
 #include <cstdarg>
+#include <cstdlib>
+#include <ctime>
 #include <deque>
 #include <unordered_set>
+#ifndef _WIN32
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace sqrl {
 
@@ -55,36 +62,135 @@ static bool read_file_bytes(const std::string& path, std::vector<uint8_t>* out) 
   return rd == (size_t)n;
 }
 
-/* optional disk cache (SQRL_CACHE env): avoids re-hitting servers while testing */
-static bool cache_lookup(const std::string& url, std::vector<uint8_t>* out) {
-  const char* dir = getenv("SQRL_CACHE");
-  if (!dir || url.rfind("http", 0) != 0) return false;
+static const int64_t kCacheMaxAgeSec = 2 * 24 * 3600;
+
+static std::string cache_dir() {
+  const char* env = getenv("SQRL_CACHE");
+  return (env && *env) ? std::string(env) : std::string("square_cache");
+}
+
+static void cache_mkdir(const std::string& dir) {
+#ifdef _WIN32
+  CreateDirectoryA(dir.c_str(), nullptr);
+#else
+  mkdir(dir.c_str(), 0755);
+#endif
+}
+
+static void cache_remove(const std::string& path) {
+#ifdef _WIN32
+  DeleteFileA(path.c_str());
+#else
+  unlink(path.c_str());
+#endif
+}
+
+static uint64_t cache_hash(const std::string& url) {
   uint64_t h = 1469598103934665603ull;
   for (char c : url) { h ^= (uint8_t)c; h *= 1099511628211ull; }
+  return h;
+}
+
+static std::string cache_path(const std::string& dir, const std::string& url) {
   char path[512];
-  snprintf(path, sizeof(path), "%s/%016llx.cache", dir, (unsigned long long)h);
-  FILE* f = fopen(path, "rb");
+  snprintf(path, sizeof(path), "%s/%016llx.cache", dir.c_str(), (unsigned long long)cache_hash(url));
+  return path;
+}
+
+static bool parse_cache_header(const std::string& head, int64_t* ts_out) {
+  if (head.rfind("SQRL1 ", 0) != 0) return false;
+  size_t e = head.find('\n');
+  if (e == std::string::npos || e < 7) return false;
+  *ts_out = (int64_t)atoll(head.substr(6, e - 6).c_str());
+  return *ts_out > 0;
+}
+
+static bool cache_entry_expired(int64_t ts) {
+  return (int64_t)time(nullptr) - ts > kCacheMaxAgeSec;
+}
+
+static bool cache_is_expired_file(const std::string& path) {
+  FILE* f = fopen(path.c_str(), "rb");
+  if (!f) return false;
+  char head[64] = {0};
+  size_t n = fread(head, 1, sizeof(head) - 1, f);
+  fclose(f);
+  int64_t ts = 0;
+  std::string hs(head, n);
+  return !parse_cache_header(hs, &ts) || cache_entry_expired(ts);
+}
+
+static void cache_sweep(const std::string& dir) {
+#ifdef _WIN32
+  std::string pat = dir + "\\*.cache";
+  WIN32_FIND_DATAA fd;
+  HANDLE h = FindFirstFileA(pat.c_str(), &fd);
+  if (h == INVALID_HANDLE_VALUE) return;
+  do {
+    if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+    std::string path = dir + "\\" + fd.cFileName;
+    if (cache_is_expired_file(path)) cache_remove(path);
+  } while (FindNextFileA(h, &fd));
+  FindClose(h);
+#else
+  DIR* d = opendir(dir.c_str());
+  if (!d) return;
+  struct dirent* e;
+  while ((e = readdir(d))) {
+    std::string name = e->d_name;
+    if (name.size() < 6 || name.compare(name.size() - 6, 6, ".cache") != 0) continue;
+    std::string path = dir + "/" + name;
+    if (cache_is_expired_file(path)) cache_remove(path);
+  }
+  closedir(d);
+#endif
+}
+
+static bool cache_lookup(const std::string& url, std::vector<uint8_t>* out) {
+  if (url.rfind("http", 0) != 0) return false;
+  std::string path = cache_path(cache_dir(), url);
+  FILE* f = fopen(path.c_str(), "rb");
   if (!f) return false;
   fseek(f, 0, SEEK_END);
   long n = ftell(f);
   fseek(f, 0, SEEK_SET);
-  out->resize(n);
-  size_t rd = fread(out->data(), 1, n, f);
+  std::string all;
+  all.resize(n > 0 ? (size_t)n : 0);
+  size_t rd = n > 0 ? fread(&all[0], 1, (size_t)n, f) : 0;
   fclose(f);
-  return rd == (size_t)n && n > 0;
-}
-static void cache_store(const std::string& url, const std::vector<uint8_t>& body) {
-  const char* dir = getenv("SQRL_CACHE");
-  if (!dir || url.rfind("http", 0) != 0 || body.empty()) return;
-  uint64_t h = 1469598103934665603ull;
-  for (char c : url) { h ^= (uint8_t)c; h *= 1099511628211ull; }
-  char path[512];
-  snprintf(path, sizeof(path), "%s/%016llx.cache", dir, (unsigned long long)h);
-  FILE* f = fopen(path, "wb");
-  if (f) {
-    fwrite(body.data(), 1, body.size(), f);
-    fclose(f);
+  int64_t ts = 0;
+  if (rd == 0 || !parse_cache_header(all, &ts) || cache_entry_expired(ts)) {
+    cache_remove(path);
+    return false;
   }
+  size_t body_at = all.find('\n') + 1;
+  if (body_at >= all.size()) {
+    cache_remove(path);
+    return false;
+  }
+  out->assign(all.begin() + body_at, all.end());
+  return true;
+}
+
+static void cache_store(const std::string& url, const std::vector<uint8_t>& body) {
+  if (url.rfind("http", 0) != 0 || body.empty()) return;
+  static bool swept = false;
+  std::string dir = cache_dir();
+  if (!swept) {
+    swept = true;
+    cache_mkdir(dir);
+    cache_sweep(dir);
+  }
+  std::string path = cache_path(dir, url);
+  FILE* f = fopen(path.c_str(), "wb");
+  if (!f) {
+    cache_mkdir(dir);
+    f = fopen(path.c_str(), "wb");
+  }
+  if (!f) return;
+  fprintf(f, "SQRL1 %lld\n", (long long)time(nullptr));
+  fwrite(body.data(), 1, body.size(), f);
+  fclose(f);
 }
 
 HttpResult fetch_sync(Instance* inst, const std::string& url, const char* dest);
@@ -117,22 +223,24 @@ HttpResult fetch_sync(Instance* inst, const std::string& url, const char* dest) 
     } else r.err = "bad data url";
     return r;
   }
-  std::vector<uint8_t> cached;
-  if (cache_lookup(url, &cached)) {
-    HttpResult r;
-    r.ok = true;
-    r.status = 200;
-    r.body = std::move(cached);
-    r.final_url = url;
-    return r;
-  }
-  std::vector<HttpHeader> hdrs;
-  hdrs.push_back({"User-Agent", inst->ua});
   std::string dest_s = dest ? dest : "document";
   bool is_doc = dest_s == "document";
   bool is_img = dest_s == "image";
   bool is_style = dest_s == "style";
   bool is_script = dest_s == "script";
+  if (is_img) {
+    std::vector<uint8_t> cached;
+    if (cache_lookup(url, &cached)) {
+      HttpResult r;
+      r.ok = true;
+      r.status = 200;
+      r.body = std::move(cached);
+      r.final_url = url;
+      return r;
+    }
+  }
+  std::vector<HttpHeader> hdrs;
+  hdrs.push_back({"User-Agent", inst->ua});
   if (is_doc) {
     hdrs.push_back({"Accept",
                     "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,"
@@ -204,7 +312,7 @@ HttpResult fetch_sync(Instance* inst, const std::string& url, const char* dest) 
     std::this_thread::sleep_for(std::chrono::milliseconds(600 * (attempt + 1)));
     engine_log(2, "[retry] %s (attempt %d, status %d)", url.c_str(), attempt + 1, r.status);
   }
-  if (r.ok && r.status == 200 && !looks_blocked(r)) {
+  if (is_img && r.ok && r.status == 200 && !looks_blocked(r)) {
     cache_store(url, r.body);
   }
   return r;
