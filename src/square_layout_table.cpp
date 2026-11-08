@@ -26,6 +26,7 @@ struct TableCell {
 struct TableRow {
   Box* box = nullptr;
   std::vector<TableCell> cells;
+  int group = 1; /* 0 = thead, 1 = tbody/ungrouped, 2 = tfoot */
 };
 
 static int span_attr(Node* n, const char* name) {
@@ -95,11 +96,15 @@ static void collect_table_rows(Node* el, ComputedStyle* table_cs, Box* b,
     if (ccs->position == P_ABSOLUTE || ccs->position == P_FIXED) continue;
     if (ccs->display == D_TABLE_ROW_GROUP) {
       flush_stray();
+      int gclass = 1;
+      if (c->tag == "thead") gclass = 0;
+      else if (c->tag == "tfoot") gclass = 2;
       for (Node* rc : c->children) {
         if (rc->type != N_ELEMENT || !rc->cs || node_invisible(rc->cs)) continue;
         if (rc->cs->position == P_ABSOLUTE || rc->cs->position == P_FIXED) continue;
         if (rc->cs->display == D_TABLE_ROW) {
           TableRow row;
+          row.group = gclass;
           row.box = new_box(rc, b);
           row.box->cs = rc->cs;
           b->kids.push_back(row.box);
@@ -107,6 +112,7 @@ static void collect_table_rows(Node* el, ComputedStyle* table_cs, Box* b,
           rows->push_back(row);
         } else if (rc->cs->display == D_TABLE_CELL) {
           TableRow row;
+          row.group = gclass;
           row.box = new_box(nullptr, b);
           row.box->cs = table_cs;
           b->kids.push_back(row.box);
@@ -120,6 +126,7 @@ static void collect_table_rows(Node* el, ComputedStyle* table_cs, Box* b,
           rows->push_back(row);
         } else {
           TableRow row;
+          row.group = gclass;
           row.box = new_box(nullptr, b);
           row.box->cs = table_cs;
           b->kids.push_back(row.box);
@@ -162,6 +169,19 @@ static void collect_table_rows(Node* el, ComputedStyle* table_cs, Box* b,
     stray.push_back(cell);
   }
   flush_stray();
+  /* order rows: thead groups, then tbody-class rows, then tfoot groups,
+   * keeping relative DOM order inside each class; b->kids follows */
+  std::vector<TableRow> ordered;
+  std::vector<Box*> ordered_kids;
+  ordered.reserve(rows->size());
+  for (int g = 0; g < 3; g++)
+    for (TableRow& row : *rows)
+      if (row.group == g) {
+        ordered.push_back(row);
+        ordered_kids.push_back(row.box);
+      }
+  *rows = std::move(ordered);
+  b->kids = std::move(ordered_kids);
   for (TableRow& row : *rows)
     for (TableCell& cell : row.cells)
       if (!cell.box->parent) cell.box->parent = row.box;
@@ -195,6 +215,52 @@ float layout_table_content(Box* b, Node* el, LayoutCtx& lc) {
       cell.col = cursor_col;
       cursor_col += cell.cs_span;
       if (cursor_col >= ncols) cursor_col = 0;
+    }
+  }
+
+  /* colgroup/col widths: scan direct colgroup children and direct col
+   * children (display:none, so no boxes exist for them) */
+  std::vector<float> col_w;
+  {
+    int ci = 0;
+    auto scan_col = [&](Node* cn) {
+      if (cn->type != N_ELEMENT || cn->tag != "col") return;
+      int span = span_attr(cn, "span");
+      float wv = 0;
+      const std::string* wa = cn->attr("width");
+      bool have_w = false;
+      if (wa) {
+        const std::string& s = *wa;
+        size_t e = 0;
+        while (e < s.size() && (isdigit((unsigned char)s[e]) || s[e] == '.')) e++;
+        if (e > 0) {
+          wv = (float)atof(s.substr(0, e).c_str());
+          if (e < s.size() && s[e] == '%') {
+            wv = wv * avail_w / 100.f;
+          }
+          have_w = true;
+        }
+      }
+      if (!have_w && cn->cs) {
+        ComputedStyle* ccs = cn->cs;
+        if (ccs->width.unit != L_AUTO && ccs->width.unit != L_NORMAL) {
+          wv = res_l(ccs->width, avail_w, ccs->font_size, lc);
+          have_w = true;
+        }
+      }
+      for (int k = 0; k < span; k++) {
+        if ((int)col_w.size() <= ci) col_w.resize(ci + 1, 0);
+        if (have_w) col_w[ci] = wv;
+        ci++;
+      }
+    };
+    for (Node* c : el->children) {
+      if (c->type != N_ELEMENT) continue;
+      if (c->tag == "colgroup") {
+        for (Node* rc : c->children) scan_col(rc);
+      } else if (c->tag == "col") {
+        scan_col(c);
+      }
     }
   }
 
@@ -246,6 +312,14 @@ float layout_table_content(Box* b, Node* el, LayoutCtx& lc) {
   if (col_total > avail_w && col_total > 0) {
     float k = std::max(0.f, avail_w) / col_total;
     for (int i = 0; i < ncols; i++) colw[i] *= k;
+  }
+  /* colgroup/col widths act as a floor on the content-based sizes */
+  if (!col_w.empty()) {
+    for (int i = 0; i < ncols && i < (int)col_w.size(); i++) {
+      if (col_w[i] > colw[i]) colw[i] = col_w[i];
+    }
+    col_total = 0;
+    for (int i = 0; i < ncols; i++) col_total += colw[i];
   }
   float extra = avail_w - col_total;
   if (extra > 0) {
@@ -337,6 +411,34 @@ float layout_table_content(Box* b, Node* el, LayoutCtx& lc) {
       }
     }
     y += rowh[r];
+  }
+
+  /* border-collapse: collapse — zero shared cell edges so each shared
+   * border paints once; geometry (w/cw) is left untouched */
+  if (cs->border_collapse) {
+    for (size_t r = 0; r < rows.size(); r++) {
+      for (size_t a = 0; a < rows[r].cells.size(); a++) {
+        TableCell& A = rows[r].cells[a];
+        if (!A.box) continue;
+        for (size_t bi = 0; bi < rows[r].cells.size(); bi++) {
+          if (bi == a) continue;
+          TableCell& B = rows[r].cells[bi];
+          if (!B.box) continue;
+          if (A.col + A.cs_span == B.col && A.box->bor_r > 0 && B.box->bor_l > 0)
+            A.box->bor_r = 0;
+        }
+        if (r + 1 < rows.size() && A.rs_span == 1 && A.box->bor_b > 0) {
+          for (TableCell& B : rows[r + 1].cells) {
+            if (!B.box) continue;
+            if (A.col < B.col + B.cs_span && B.col < A.col + A.cs_span &&
+                B.box->bor_t > 0) {
+              A.box->bor_b = 0;
+              break;
+            }
+          }
+        }
+      }
+    }
   }
 
   float content_h = y;

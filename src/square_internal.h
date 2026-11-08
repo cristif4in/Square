@@ -339,6 +339,15 @@ struct ComputedStyle {
   int anim_iterations = 1;
   uint8_t list_style = 0;                /* 0 none, 1 disc */
   bool visibility_hidden = false;        /* visibility: hidden (subtree skipped) */
+  /* tables */
+  bool border_collapse = false;          /* border-collapse: collapse */
+  /* block flow */
+  uint8_t clear = 0;                     /* 0 none, 1 left, 2 right, 3 both */
+  uint8_t css_float = 0;                 /* 0 none, 1 left, 2 right */
+  /* transitions (subset: opacity / color / background-color / transform) */
+  uint8_t trans_props = 0;               /* bit1 opacity, bit2 color, bit4 bg-color, bit8 transform */
+  float trans_dur = 0;                   /* seconds */
+  std::string trans_timing = "ease";
   /* resolution context */
   bool pseudo_before = false, pseudo_after = false;
 };
@@ -575,6 +584,9 @@ void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images
 /* animation-only style update: re-evaluates keyframe values on the existing
  * computed styles WITHOUT the full selector cascade (cheap enough per frame) */
 void style_reanimate(Document* doc, int vw, int vh);
+/* CSS transitions (square_style.cpp) */
+void transitions_reset();
+bool css_has_transitions();
 /* scrollbar geometry shared by the painter and the drag API: returns the
  * effective scrollbar width (0 = hidden/not scrollable); fills thumb_y /
  * thumb_h (track coords, track spans 0..viewport_h) when the page scrolls */

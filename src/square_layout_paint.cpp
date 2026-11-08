@@ -7,6 +7,7 @@
 #include "square_layout_internal.h"
 
 #include <algorithm>
+#include <functional>
 
 namespace sqrl {
 
@@ -534,11 +535,36 @@ void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images
   if (doc->html && doc->html->cs && doc->html->cs->bg_color.a > 0) canvas = doc->html->cs->bg_color;
   if (doc->body && doc->body->cs && doc->body->cs->bg_color.a > 0) canvas = doc->body->cs->bg_color;
   gfx_fill_rect(*s, {0, 0, (float)s->w, (float)s->h}, canvas, nullptr, nullptr, nullptr);
+  /* sticky: collect boxes pinned by top/bottom against the viewport */
+  std::vector<std::pair<Box*, float>> sticky;
+  if (root) {
+    std::function<void(Box*)> collect = [&](Box* bx) {
+      if (bx->cs && bx->cs->position == P_STICKY) {
+        float em = bx->cs->font_size;
+        float delta = 0;
+        if (bx->cs->top.unit != L_AUTO && bx->cs->top.unit != L_NORMAL) {
+          float desired = scroll_y + res_l(bx->cs->top, 0, em, lc);
+          delta = desired - bx->y;
+          if (delta < 0) delta = 0;
+        } else if (bx->cs->bottom.unit != L_AUTO && bx->cs->bottom.unit != L_NORMAL) {
+          float desired_bottom = scroll_y + (float)s->h - res_l(bx->cs->bottom, 0, em, lc);
+          delta = desired_bottom - (bx->y + bx->h);
+          if (delta > 0) delta = 0;
+        }
+        if (delta != 0) sticky.push_back({bx, delta});
+      }
+      for (Box* k : bx->kids) collect(k);
+      for (Box* o : bx->out_of_flow) collect(o);
+    };
+    collect(root);
+  }
   /* scroll: shift the (read-only) box tree up while painting, restore after.
    * Boxes above the viewport are culled by the clip rect. */
   bool shifted = root && scroll_y != 0;
   if (shifted) offset_box_recursive(root, 0, -scroll_y);
+  for (auto& sp : sticky) offset_box_recursive(sp.first, 0, sp.second);
   if (root) paint_box(root, ctx);
+  for (auto& sp : sticky) offset_box_recursive(sp.first, 0, -sp.second);
   if (shifted) offset_box_recursive(root, 0, scroll_y);
   draw_scrollbar(*s, doc, root, scroll_y);
 }

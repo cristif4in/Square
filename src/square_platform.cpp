@@ -373,6 +373,7 @@ static void set_state(Instance* inst, int st, float progress, const char* info) 
 
 void fire_queued_clicks(Instance* inst); /* defined in square_platform_api.cpp (input) */
 void page_main(Instance* inst, std::string url) {
+  transitions_reset();
   {
     std::lock_guard<std::mutex> lk(g_reg_mtx);
     g_node_registry.clear();
@@ -888,7 +889,8 @@ js_done:;
     /* running CSS animations: repaint periodically so keyframes advance.
      * Light path: re-evaluate keyframe values + layout + paint, skipping the
      * selector cascade (that's what made animated pages lag). */
-    if (inst->doc && inst->doc->sheet.has_animations && now_ms() - last_anim_frame >= 33) {
+    if (inst->doc && (inst->doc->sheet.has_animations || css_has_transitions()) &&
+        now_ms() - last_anim_frame >= 33) {
       last_anim_frame = now_ms();
       std::lock_guard<std::mutex> doclk(inst->doc_mtx);
       if (!inst->dirty && !inst->cancel && inst->doc->body) {

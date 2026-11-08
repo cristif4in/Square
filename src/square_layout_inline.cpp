@@ -24,6 +24,8 @@ static void measure_text_item(InlineItem* it, const ComputedStyle* cs, LayoutCtx
   float half = (lh - (asc + desc)) / 2;
   it->ascent = asc + half;
   it->descent = desc + half;
+  it->va = cs->vert_align;
+  it->va_len = (cs->vert_align == VA_LEN) ? res_l(cs->vert_len, 0, cs->font_size, lc) : 0;
 }
 
 static void push_text_items(const std::string& data, const ComputedStyle* cs, Node* tn,
@@ -262,13 +264,28 @@ static void emit_line(Box* container, std::vector<InlineItem>& seq, size_t start
         TextRun run = it->run;
         run.x = x;
         run.y = y_line_top + it->ascent;
+        float dy = 0;
+        switch (it->va) {
+          case VA_BOTTOM:
+            dy = (ascent + descent) - (it->ascent + it->descent);
+            break;
+          case VA_MIDDLE:
+            dy = ((ascent + descent) - (it->ascent + it->descent)) / 2;
+            break;
+          case VA_LEN:
+            dy = -it->va_len;
+            break;
+          default:
+            break;
+        }
+        run.y += dy;
         InlineFrag f;
         f.kind = InlineFrag::F_TEXT;
         f.node = it->node;
         f.run = run;
         f.ascent = it->ascent;
         f.descent = it->descent;
-        f.rect = {x, y_line_top, it->adv, it->ascent + it->descent};
+        f.rect = {x, y_line_top + dy, it->adv, it->ascent + it->descent};
         container->frags.push_back(f);
         x += it->adv;
         break;
@@ -292,7 +309,11 @@ static void emit_line(Box* container, std::vector<InlineItem>& seq, size_t start
             f.kind = InlineFrag::F_BOX;
             f.node = bx->node;
             f.box = bx;
-            f.rect = {open[j].x0 - ml, y_line_top, x - open[j].x0 + ml + mr, ascent + descent};
+            float bdy = 0;
+            if (ics && ics->vert_align == VA_LEN)
+              bdy = -res_l(ics->vert_len, 0, ics->font_size, lc);
+            f.rise = -bdy;
+            f.rect = {open[j].x0 - ml, y_line_top + bdy, x - open[j].x0 + ml + mr, ascent + descent};
             f.ascent = ascent;
             f.descent = descent;
             container->frags.push_back(f);
@@ -309,7 +330,27 @@ static void emit_line(Box* container, std::vector<InlineItem>& seq, size_t start
         f.box = it->box;
         float bw = it->adv;
         float bh = it->h;
-        f.rect = {x, (y_line_top + ascent) - it->baseline, bw, bh};
+        float def_y = (y_line_top + ascent) - it->baseline;
+        float ry = def_y;
+        const ComputedStyle* rcs = it->node ? it->node->cs : nullptr;
+        switch (it->va) {
+          case VA_TOP:
+            ry = y_line_top;
+            break;
+          case VA_BOTTOM:
+            ry = y_line_top + ascent + descent - bh;
+            break;
+          case VA_MIDDLE:
+            ry = y_line_top + (ascent + descent - bh) / 2;
+            break;
+          case VA_LEN:
+            ry = def_y - (rcs ? res_l(rcs->vert_len, 0, rcs->font_size, lc) : it->va_len);
+            break;
+          default:
+            break;
+        }
+        f.rise = def_y - ry;
+        f.rect = {x, ry, bw, bh};
         f.ascent = it->baseline;
         f.descent = bh - it->baseline;
         container->frags.push_back(f);
@@ -326,7 +367,11 @@ static void emit_line(Box* container, std::vector<InlineItem>& seq, size_t start
     f.kind = InlineFrag::F_BOX;
     f.node = o.box->node;
     f.box = o.box;
-    f.rect = {o.x0, y_line_top, x - o.x0, ascent + descent};
+    float bdy = 0;
+    if (o.box->node && o.box->node->cs && o.box->node->cs->vert_align == VA_LEN)
+      bdy = -res_l(o.box->node->cs->vert_len, 0, o.box->node->cs->font_size, lc);
+    f.rise = -bdy;
+    f.rect = {o.x0, y_line_top + bdy, x - o.x0, ascent + descent};
     f.ascent = ascent;
     f.descent = descent;
     container->frags.push_back(f);

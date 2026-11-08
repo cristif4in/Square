@@ -25,6 +25,31 @@ float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
   bool first_done = false;
 
   std::vector<Node*> inline_group;
+  struct FloatBox {
+    int side = 0;
+    float x = 0, y = 0, w = 0, h = 0;
+  };
+  std::vector<FloatBox> floats;
+  auto float_band = [&](float y, float h, float* xl_out, float* w_out) {
+    float xl = x0;
+    float xr = x0 + avail_w;
+    for (auto& fl : floats) {
+      if (fl.y < y + h && fl.y + fl.h > y) {
+        if (fl.side == 1) xl = std::max(xl, fl.x + fl.w);
+        else xr = std::min(xr, fl.x);
+      }
+    }
+    *xl_out = xl;
+    *w_out = std::max(0.f, xr - xl);
+  };
+  auto clear_bottom = [&](int bits) {
+    float bot = y0 + cur_y;
+    for (auto& fl : floats) {
+      if (bits == 3 || (bits == 1 && fl.side == 1) || (bits == 2 && fl.side == 2))
+        bot = std::max(bot, fl.y + fl.h);
+    }
+    return bot;
+  };
   auto flush_inline_group = [&]() {
     if (inline_group.empty()) return;
     /* skip pure-whitespace groups */
@@ -39,13 +64,26 @@ float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
     if (any_content) {
       Box* anon = new_box(nullptr, b);
       anon->cs = cs;
+      float gy = y0 + cur_y + (first_done ? 0 : first_margin);
       anon->x = x0;
-      anon->y = y0 + cur_y + (first_done ? 0 : first_margin);
+      anon->y = gy;
       anon->w = avail_w;
       anon->cw = avail_w;
       std::vector<InlineItem> seq;
       flatten_nodes(inline_group, cs, &seq, lc, cs->white_space == WS_PRE);
-      float h = layout_inline_seq(anon, seq, lc, anon->x, anon->y);
+      float band_x = x0, band_w = avail_w;
+      float h = 0;
+      for (int iter = 0; iter < 5; iter++) {
+        float bx_, bw_;
+        float_band(gy, h > 0 ? h : 0.01f, &bx_, &bw_);
+        if (iter > 0 && bx_ == band_x && bw_ == band_w) break;
+        band_x = bx_;
+        band_w = bw_;
+        anon->x = band_x;
+        anon->w = band_w;
+        anon->cw = band_w;
+        h = layout_inline_seq(anon, seq, lc, anon->x, anon->y);
+      }
       anon->h = h;
       b->kids.push_back(anon);
       cur_y += h + (first_done ? 0 : first_margin);
@@ -72,6 +110,66 @@ float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
     }
     bool atomic_non_media = is_atomic_inline(ccs->display) && c->tag != "img" && c->tag != "svg" &&
                             c->tag != "video" && c->tag != "canvas" && c->tag != "iframe";
+    if (ccs->css_float == 1 || ccs->css_float == 2) {
+      flush_inline_group();
+      float em = ccs->font_size;
+      float mt = res_l(ccs->margin[0], avail_w, em, lc);
+      float ml = res_l(ccs->margin[3], avail_w, em, lc);
+      float mr = res_l(ccs->margin[1], avail_w, em, lc);
+      if (ccs->clear) {
+        float bot = clear_bottom(ccs->clear);
+        if (bot > y0 + cur_y) cur_y = bot - y0;
+      }
+      Box* cb = new_box(c, b);
+      b->kids.push_back(cb);
+      resolve_box_edges(cb, ccs, avail_w, lc);
+      float declared_w = avail_w;
+      if (ccs->width.unit != L_AUTO && ccs->width.unit != L_NORMAL) {
+        declared_w = res_l(ccs->width, avail_w, em, lc);
+        declared_w += cb->pad_l + cb->pad_r + cb->bor_l + cb->bor_r;
+      } else if (ccs->width_content_mode == 1) {
+        declared_w = measure_max_content_width(c, lc);
+      } else if (ccs->width_content_mode == 2) {
+        declared_w = measure_min_content_width(c, lc);
+      } else {
+        declared_w = measure_max_content_width(c, lc);
+      }
+      if (ccs->max_w.unit != L_AUTO && ccs->max_w.unit != L_NORMAL)
+        declared_w = std::min(declared_w, res_l(ccs->max_w, avail_w, em, lc));
+      if (ccs->min_w.unit != L_AUTO && ccs->min_w.unit != L_NORMAL)
+        declared_w = std::max(declared_w, res_l(ccs->min_w, avail_w, em, lc));
+      if (declared_w > avail_w) declared_w = avail_w;
+      cb->w = declared_w;
+      cb->cw = std::max(0.f, declared_w - cb->pad_l - cb->pad_r - cb->bor_l - cb->bor_r);
+      cb->x = 0;
+      cb->y = 0;
+      float ch = layout_element(cb, c, lc);
+      float total_h = ch;
+      if (ccs->height.unit != L_AUTO && ccs->height.unit != L_NORMAL)
+        total_h = res_l(ccs->height, avail_w, em, lc);
+      if (ccs->min_h.unit != L_AUTO && ccs->min_h.unit != L_NORMAL)
+        total_h = std::max(total_h, res_l(ccs->min_h, avail_w, em, lc));
+      if (ccs->max_h.unit != L_AUTO && ccs->max_h.unit != L_NORMAL)
+        total_h = std::min(total_h, res_l(ccs->max_h, avail_w, em, lc));
+      cb->h = total_h;
+      int side = ccs->css_float;
+      float fx = side == 1 ? x0 + ml : x0 + avail_w - declared_w - mr;
+      float fy = y0 + cur_y + mt;
+      bool moved = true;
+      while (moved) {
+        moved = false;
+        for (auto& fl : floats) {
+          if (fl.side == side && fy < fl.y + fl.h && fy + total_h > fl.y &&
+              (side == 1 ? fx < fl.x + fl.w : fx + declared_w > fl.x)) {
+            fy = fl.y + fl.h;
+            moved = true;
+          }
+        }
+      }
+      offset_box_recursive(cb, fx - cb->x, fy - cb->y);
+      floats.push_back({side, fx, fy, declared_w, total_h});
+      continue;
+    }
     if (is_blocky(ccs->display) || atomic_non_media) {
       /* inline-flex/-block/-grid containers in block flow are laid out as
        * block boxes: the inline replaced-item path corrupts the heap when
@@ -110,13 +208,23 @@ float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
         declared_w = std::max(declared_w, res_l(ccs->min_w, avail_w, em, lc));
       if (declared_w > avail_w) declared_w = avail_w;
 
+      if (ccs->clear) {
+        float bot = clear_bottom(ccs->clear);
+        if (bot > y0 + cur_y) cur_y = bot - y0;
+      }
+      /* shrink into the float-free band at this vertical position */
+      float band_x = x0, band_w = avail_w;
+      float child_y_page = !first_done ? y0 : y0 + cur_y + std::max(prev_margin, mt);
+      float_band(child_y_page, 0.01f, &band_x, &band_w);
+      if (declared_w > band_w) declared_w = band_w;
+
       if (ml_auto && mr_auto) {
-        ml = std::max(0.f, (avail_w - declared_w) / 2);
-        mr = std::max(0.f, avail_w - declared_w - ml);
+        ml = std::max(0.f, (band_w - declared_w) / 2);
+        mr = std::max(0.f, band_w - declared_w - ml);
       } else if (ml_auto) {
-        ml = std::max(0.f, avail_w - declared_w - mr);
+        ml = std::max(0.f, band_w - declared_w - mr);
       } else if (mr_auto) {
-        mr = std::max(0.f, avail_w - declared_w - ml);
+        mr = std::max(0.f, band_w - declared_w - ml);
       }
 
       float top_gap = std::max(prev_margin, mt);
@@ -125,7 +233,7 @@ float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
       cb->w = declared_w;
       cb->cw = declared_w - cb->pad_l - cb->pad_r - cb->bor_l - cb->bor_r;
       cb->cw = std::max(0.f, cb->cw);
-      cb->x = x0 + ml;
+      cb->x = band_x + ml;
       cb->y = y0 + cur_y + (first_done ? top_gap : 0);
       if (!first_done) cb->y = y0;
       float ch = layout_element(cb, c, lc);
@@ -160,6 +268,7 @@ float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
     inline_group.push_back(c);
   }
   flush_inline_group();
+  for (auto& fl : floats) cur_y = std::max(cur_y, fl.y + fl.h - y0);
 
   if (cs->display == D_LIST_ITEM && cs->list_style != 0) {
     void* f = font_for(cs);

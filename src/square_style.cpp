@@ -13,6 +13,8 @@
 
 namespace sqrl {
 
+static bool g_any_transitions = false;
+
 /* apply one declaration to computed style */
 static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, const std::string& raw_value,
                               ResolveCtx& rc, CustomProps* own_vars) {
@@ -434,7 +436,17 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     else if (s == "middle") cs->vert_align = VA_MIDDLE;
     else if (s == "bottom") cs->vert_align = VA_BOTTOM;
     else if (s == "baseline") cs->vert_align = VA_BASELINE;
-    else {
+    else if (s == "sub") {
+      cs->vert_align = VA_LEN;
+      cs->vert_len = Length();
+      cs->vert_len.unit = L_EM;
+      cs->vert_len.val = -0.25f;
+    } else if (s == "super") {
+      cs->vert_align = VA_LEN;
+      cs->vert_len = Length();
+      cs->vert_len.unit = L_EM;
+      cs->vert_len.val = 0.35f;
+    } else {
       cs->vert_align = VA_LEN;
       parse_length(substitute_vars(v, rc), &cs->vert_len, rc);
     }
@@ -746,6 +758,54 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
   }
   if (prop == "list-style-type") { cs->list_style = lc(v) == "none" ? 0 : 1; return true; }
   if (prop == "list-style") { cs->list_style = lc(v).find("none") != std::string::npos ? 0 : 1; return true; }
+  if (prop == "border-collapse") { cs->border_collapse = lc(v) == "collapse"; return true; }
+  if (prop == "clear") {
+    std::string s = lc(v);
+    cs->clear = s == "left" ? 1 : (s == "right" ? 2 : (s == "both" ? 3 : 0));
+    return true;
+  }
+  if (prop == "float") {
+    std::string s = lc(v);
+    cs->css_float = s == "left" ? 1 : (s == "right" ? 2 : 0);
+    return true;
+  }
+  if (prop == "transition" || prop == "transition-duration") {
+    std::string body = substitute_vars(v, rc);
+    if (prop == "transition-duration") {
+      std::string s = lc(trim(body));
+      cs->trans_dur = (float)atof(s.c_str()) * (s.find("ms") != std::string::npos ? 0.001f : 1.f);
+      if (cs->trans_dur > 0 && cs->trans_props) g_any_transitions = true;
+      return true;
+    }
+    std::vector<std::string> toks;
+    {
+      std::string cur;
+      for (char c : body) {
+        if (isspace((unsigned char)c)) {
+          if (!cur.empty()) { toks.push_back(cur); cur.clear(); }
+        } else cur += c;
+      }
+      if (!cur.empty()) toks.push_back(cur);
+    }
+    cs->trans_props = 0;
+    cs->trans_dur = 0;
+    cs->trans_timing = "ease";
+    for (auto& t : toks) {
+      std::string s = lc(t);
+      if (s == "all") cs->trans_props = 15;
+      else if (s == "opacity") cs->trans_props |= 1;
+      else if (s == "color") cs->trans_props |= 2;
+      else if (s == "background-color") cs->trans_props |= 4;
+      else if (s == "transform") cs->trans_props |= 8;
+      else if (s == "ease" || s == "linear" || s == "ease-in" || s == "ease-out" || s == "ease-in-out")
+        cs->trans_timing = s;
+      else if (!s.empty() && (isdigit((unsigned char)s[0]) || s[0] == '.') &&
+               (s.back() == 's' || s.find("ms") == s.size() - 2))
+        cs->trans_dur = (float)atof(s.c_str()) * (s.find("ms") != std::string::npos ? 0.001f : 1.f);
+    }
+    if (cs->trans_props && cs->trans_dur > 0) g_any_transitions = true;
+    return true;
+  }
   /* ignored-but-consumed properties (animations, transitions, cursor, will-change, etc.) */
   static const char* kIgnored[] = {
     "transition", "transition-property", "transition-duration", "transition-timing-function",
@@ -805,7 +865,7 @@ struct UaSheet {
       "img,svg,video,canvas,picture,iframe,object,embed{display:inline-block}"
       "input,button,select,textarea{display:inline-block}"
       "button{font-weight:400}"
-      "table{display:table}"
+      "table{display:table;border-collapse:collapse}"
       "caption,col,colgroup{display:none}"
       "tbody,thead,tfoot{display:table-row-group}"
       "tr{display:table-row}"
@@ -1000,6 +1060,119 @@ static void evaluate_animation(ComputedStyle* cs, const StyleSheet& sheet, Resol
   }
 }
 
+/* ---- CSS transitions ---- */
+struct TransVal {
+  float from = 0, to = 0;                 /* opacity */
+  Color c_from{}, c_to{};                 /* color / background-color */
+  bool c_valid = false;
+  float m_from[6] = {1, 0, 0, 1, 0, 0};   /* transform */
+  float m_to[6] = {1, 0, 0, 1, 0, 0};
+  bool m_valid = false;
+  double t0 = 0;
+  float dur = 0;
+  std::string timing;
+};
+static std::unordered_map<Node*, std::map<std::string, TransVal>> g_transitions;
+
+void transitions_reset() { g_transitions.clear(); }
+bool css_has_transitions() { return g_any_transitions; }
+
+static Color transition_lerp_color(const Color& a, const Color& b, float t) {
+  Color r;
+  r.a = (uint8_t)(a.a + ((int)b.a - (int)a.a) * t);
+  r.r = (uint8_t)(a.r + ((int)b.r - (int)a.r) * t);
+  r.g = (uint8_t)(a.g + ((int)b.g - (int)a.g) * t);
+  r.b = (uint8_t)(a.b + ((int)b.b - (int)a.b) * t);
+  return r;
+}
+
+static void apply_transitions(Node* el, ComputedStyle* cs) {
+  if (!el || !cs || cs->trans_props == 0 || cs->trans_dur <= 0) return;
+  double now = anim_time_s();
+  std::map<std::string, TransVal>& st = g_transitions[el];
+  auto progress = [](const TransVal& tv, double now) {
+    return tv.dur > 0 ? anim_ease(tv.timing, (float)((now - tv.t0) / tv.dur)) : 1.f;
+  };
+  auto retarget = [&](TransVal& tv, double now) {
+    float p = progress(tv, now);
+    if (tv.t0 != 0) {
+      if (tv.c_valid) tv.c_from = transition_lerp_color(tv.c_from, tv.c_to, p);
+      if (tv.m_valid)
+        for (int i = 0; i < 6; i++) tv.m_from[i] += (tv.m_to[i] - tv.m_from[i]) * p;
+      tv.from += (tv.to - tv.from) * p;
+    }
+    tv.t0 = now;
+    tv.dur = cs->trans_dur;
+    tv.timing = cs->trans_timing;
+  };
+  if (cs->trans_props & 1) {
+    TransVal& tv = st["opacity"];
+    if (tv.t0 == 0) {
+      tv.from = tv.to = cs->opacity;
+      tv.t0 = now;
+      tv.dur = cs->trans_dur;
+      tv.timing = cs->trans_timing;
+    } else if (tv.to != cs->opacity) {
+      retarget(tv, now);
+      tv.to = cs->opacity;
+    }
+    float p = progress(tv, now);
+    cs->opacity = tv.from + (tv.to - tv.from) * p;
+  }
+  if (cs->trans_props & 2) {
+    TransVal& tv = st["color"];
+    if (tv.t0 == 0) {
+      tv.c_from = tv.c_to = cs->color;
+      tv.c_valid = true;
+      tv.t0 = now;
+      tv.dur = cs->trans_dur;
+      tv.timing = cs->trans_timing;
+    } else if (!(tv.c_to == cs->color)) {
+      retarget(tv, now);
+      tv.c_to = cs->color;
+      tv.c_valid = true;
+    }
+    float p = progress(tv, now);
+    cs->color = transition_lerp_color(tv.c_from, tv.c_to, p);
+  }
+  if (cs->trans_props & 4) {
+    TransVal& tv = st["background-color"];
+    if (tv.t0 == 0) {
+      tv.c_from = tv.c_to = cs->bg_color;
+      tv.c_valid = true;
+      tv.t0 = now;
+      tv.dur = cs->trans_dur;
+      tv.timing = cs->trans_timing;
+    } else if (!(tv.c_to == cs->bg_color)) {
+      retarget(tv, now);
+      tv.c_to = cs->bg_color;
+      tv.c_valid = true;
+    }
+    float p = progress(tv, now);
+    cs->bg_color = transition_lerp_color(tv.c_from, tv.c_to, p);
+  }
+  if (cs->trans_props & 8) {
+    TransVal& tv = st["transform"];
+    bool differs = !tv.m_valid || memcmp(tv.m_to, cs->mat, sizeof(tv.m_to)) != 0;
+    if (tv.t0 == 0) {
+      memcpy(tv.m_from, cs->mat, sizeof(tv.m_from));
+      memcpy(tv.m_to, cs->mat, sizeof(tv.m_to));
+      tv.m_valid = true;
+      tv.t0 = now;
+      tv.dur = cs->trans_dur;
+      tv.timing = cs->trans_timing;
+    } else if (differs) {
+      retarget(tv, now);
+      memcpy(tv.m_to, cs->mat, sizeof(tv.m_to));
+      tv.m_valid = true;
+    }
+    float p = progress(tv, now);
+    for (int i = 0; i < 6; i++) cs->mat[i] = tv.m_from[i] + (tv.m_to[i] - tv.m_from[i]) * p;
+    static const float kIdentity[6] = {1, 0, 0, 1, 0, 0};
+    if (memcmp(cs->mat, kIdentity, sizeof(kIdentity)) != 0) cs->has_transform = true;
+  }
+}
+
 static void compute_style_for(Node* el, const ComputedStyle* parent, const CustomProps* parent_vars,
                               const StyleSheet& sheet, float rem, int vw, int vh) {
   /* clear old */
@@ -1084,6 +1257,7 @@ static void compute_style_for(Node* el, const ComputedStyle* parent, const Custo
 
   /* animations (evaluated after all declarations are in) */
   evaluate_animation(cs, sheet, rc);
+  apply_transitions(el, cs);
 
   /* elements hidden by UA (head/script/...) handled via UA display:none */
   el->needs_style = false;
@@ -1142,7 +1316,7 @@ bool parse_css_color(const std::string& raw, Color* out) {
 
 /* animation-only pass: walk the tree and re-apply keyframe values */
 void style_reanimate(Document* doc, int vw, int vh) {
-  if (!doc || !doc->root || doc->sheet.keyframes.empty()) return;
+  if (!doc || !doc->root || (doc->sheet.keyframes.empty() && !g_any_transitions)) return;
   std::function<void(Node*)> walk = [&](Node* n) {
     if (n->cs) {
       ResolveCtx rc;
@@ -1153,6 +1327,7 @@ void style_reanimate(Document* doc, int vw, int vh) {
       rc.vh = (float)vh;
       rc.current_color = n->cs->color;
       evaluate_animation(n->cs, doc->sheet, rc);
+      apply_transitions(n, n->cs);
     }
     for (int pe = 0; pe < 2; pe++) {
       if (n->pseudo[pe]) {

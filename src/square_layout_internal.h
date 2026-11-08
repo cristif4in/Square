@@ -34,6 +34,8 @@ struct InlineItem {
   float h = 0;
   float baseline = 0;
   bool whitespace = false;
+  VertAlign va = VA_BASELINE;
+  float va_len = 0;
 };
 
 /* ============================ shared helpers (square_layout_common.cpp) ============================ */
