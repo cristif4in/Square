@@ -106,6 +106,12 @@ struct Instance {
   std::vector<Node*> graveyard;
   std::mutex dirty_mtx;
   std::vector<Node*> dirty_nodes;
+  TextSelection sel;
+  bool sel_dragging = false;
+  std::atomic<bool> sel_dirty{false};
+  bool press_valid = false;
+  float press_x = 0, press_y = 0;
+  int64_t press_node_id = 0;
 
   /* JS */
   JSRuntime* rt = nullptr;
@@ -164,6 +170,7 @@ JSValue wrap_node(JSContext* ctx, Node* n);
 Node* unwrap_node_ctx(JSContext* ctx, JSValueConst v);
 void mark_dirty(Instance* inst);
 void mark_dirty_node(Instance* inst, Node* n);
+void js_module_cache_clear();
 void report_js_exception(Instance* inst);
 JSValue js_console_log(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv);
 JSValue make_console(Instance* inst);

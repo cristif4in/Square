@@ -121,6 +121,74 @@ static bool cache_is_expired_file(const std::string& path) {
   return !parse_cache_header(hs, &ts) || cache_entry_expired(ts);
 }
 
+static void cache_enforce_size_cap(const std::string& dir) {
+  struct Ent {
+    std::string path;
+    int64_t ts, size;
+  };
+  std::vector<Ent> ents;
+  int64_t total = 0;
+#ifdef _WIN32
+  std::string pat = dir + "\\*.cache";
+  WIN32_FIND_DATAA fd;
+  HANDLE h = FindFirstFileA(pat.c_str(), &fd);
+  if (h == INVALID_HANDLE_VALUE) return;
+  do {
+    if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+    std::string path = dir + "\\" + fd.cFileName;
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) continue;
+    char head[64] = {0};
+    size_t n = fread(head, 1, sizeof(head) - 1, f);
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fclose(f);
+    int64_t ts = 0;
+    std::string hs(head, n);
+    if (parse_cache_header(hs, &ts)) {
+      ents.push_back({path, ts, sz});
+      total += sz;
+    } else {
+      cache_remove(path);
+    }
+  } while (FindNextFileA(h, &fd));
+  FindClose(h);
+#else
+  DIR* d = opendir(dir.c_str());
+  if (!d) return;
+  struct dirent* e;
+  while ((e = readdir(d))) {
+    std::string name = e->d_name;
+    if (name.size() < 6 || name.compare(name.size() - 6, 6, ".cache") != 0) continue;
+    std::string path = dir + "/" + name;
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) continue;
+    char head[64] = {0};
+    size_t n = fread(head, 1, sizeof(head) - 1, f);
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fclose(f);
+    int64_t ts = 0;
+    std::string hs(head, n);
+    if (parse_cache_header(hs, &ts)) {
+      ents.push_back({path, ts, sz});
+      total += sz;
+    } else {
+      cache_remove(path);
+    }
+  }
+  closedir(d);
+#endif
+  const int64_t kCacheCapBytes = 256ll * 1024 * 1024;
+  if (total <= kCacheCapBytes) return;
+  std::sort(ents.begin(), ents.end(), [](const Ent& a, const Ent& b) { return a.ts < b.ts; });
+  for (auto& en : ents) {
+    if (total <= kCacheCapBytes) break;
+    cache_remove(en.path);
+    total -= en.size;
+  }
+}
+
 static void cache_sweep(const std::string& dir) {
 #ifdef _WIN32
   std::string pat = dir + "\\*.cache";
@@ -133,6 +201,7 @@ static void cache_sweep(const std::string& dir) {
     if (cache_is_expired_file(path)) cache_remove(path);
   } while (FindNextFileA(h, &fd));
   FindClose(h);
+  cache_enforce_size_cap(dir);
 #else
   DIR* d = opendir(dir.c_str());
   if (!d) return;
@@ -144,6 +213,7 @@ static void cache_sweep(const std::string& dir) {
     if (cache_is_expired_file(path)) cache_remove(path);
   }
   closedir(d);
+  cache_enforce_size_cap(dir);
 #endif
 }
 
@@ -407,7 +477,8 @@ static void paint_current_frame(Instance* inst, int vw, int vh) {
       inst->latest.alloc(vw, vh);
     }
     if (!getenv("SQRL_NO_PAINT"))
-      paint_document(inst->doc, inst->root_box, &inst->latest, &inst->images, (float)inst->scroll_y);
+      paint_document(inst->doc, inst->root_box, &inst->latest, &inst->images, (float)inst->scroll_y,
+                     &inst->sel);
   }
 }
 
@@ -428,6 +499,11 @@ static bool relayout_dirty(Instance* inst, const std::vector<Node*>& dirty, int 
     if (!covered) roots.push_back(n);
   }
   if (roots.empty()) return true;
+  for (Node* r : roots) {
+    std::vector<Node*> chain;
+    for (Node* a = r->parent; a && a->type == N_ELEMENT && a->cs; a = a->parent) chain.push_back(a);
+    for (size_t i = chain.size(); i-- > 0;) style_node_single(doc, chain[i], vw, vh);
+  }
   for (Node* r : roots) style_subtree(doc, r, vw, vh);
   for (Node* r : roots) {
     if (!r->box) return false;
@@ -511,6 +587,15 @@ static void set_state(Instance* inst, int st, float progress, const char* info) 
 void fire_queued_clicks(Instance* inst); /* defined in square_platform_api.cpp (input) */
 void page_main(Instance* inst, std::string url) {
   transitions_reset();
+  js_module_cache_clear();
+  inst->images.mtx.lock();
+  inst->images.map.clear();
+  inst->images.requested.clear();
+  inst->images.mtx.unlock();
+  inst->sel = TextSelection{};
+  inst->sel_dragging = false;
+  inst->sel_dirty = false;
+  inst->press_valid = false;
   {
     std::lock_guard<std::mutex> lk(g_reg_mtx);
     g_node_registry.clear();
@@ -1021,6 +1106,15 @@ js_done:;
       if (inst->dirty) {
         refresh_page(inst);
         activity = true;
+      } else if (inst->sel_dirty) {
+        inst->sel_dirty = false;
+        if (inst->root_box) {
+          std::lock_guard<std::mutex> plk(inst->paint_mtx);
+          if (!getenv("SQRL_NO_PAINT"))
+            paint_document(inst->doc, inst->root_box, &inst->latest, &inst->images,
+                           (float)inst->scroll_y, &inst->sel);
+        }
+        activity = true;
       }
     }
     /* running CSS animations: repaint periodically so keyframes advance.
@@ -1047,7 +1141,7 @@ js_done:;
         }
         if (!getenv("SQRL_NO_PAINT"))
           paint_document(inst->doc, inst->root_box, &inst->latest, &inst->images,
-                         (float)inst->scroll_y);
+                         (float)inst->scroll_y, &inst->sel);
       } else {
         inst->dirty = true; /* other changes pending: full refresh */
       }

@@ -232,6 +232,9 @@ int run_x11(square_instance* inst, const std::string& url, int vw, int vh) {
                    square_scrollbar_hit(ui.inst, ev.xbutton.x)) {
           ui.drag_sb = true;
           square_scrollbar_drag(ui.inst, ev.xbutton.y - TOOLBAR_H);
+        } else if (ev.xbutton.button == Button1) {
+          square_send_mouse_down(ui.inst, (float)ev.xbutton.x,
+                                 (float)(ev.xbutton.y - TOOLBAR_H), 0);
         } else if (ev.xbutton.button == Button4 || ev.xbutton.button == Button5) {
           /* wheel up/down */
           int pw = 0, ph = 0;

@@ -573,6 +573,27 @@ static Node* hit_test_page(Instance* inst, float x, float y) {
   return hit_test_box(inst->root_box, x, y);
 }
 
+static bool hit_text_pos(Box* b, float px, float py, Node** tn, int* off) {
+  for (auto& f : b->frags) {
+    if (f.kind != InlineFrag::F_TEXT || !f.node || f.node->type != N_TEXT) continue;
+    if (px >= f.rect.x && px <= f.rect.x + f.rect.w && py >= f.rect.y - 2 &&
+        py <= f.rect.y + f.rect.h + 2) {
+      std::vector<GlyphPos> g;
+      if (f.run.font) font_shape(f.run.font, f.run.text.c_str(), f.run.spacing, &g);
+      int k = 0;
+      while (k < (int)g.size() && f.run.x + g[k].x < px) k++;
+      *tn = f.node;
+      *off = k;
+      return true;
+    }
+  }
+  for (Box* k : b->kids)
+    if (hit_text_pos(k, px, py, tn, off)) return true;
+  for (Box* o : b->out_of_flow)
+    if (hit_text_pos(o, px, py, tn, off)) return true;
+  return false;
+}
+
 SQRL_API void square_send_mouse_move(square_instance* p, float x, float y) {
   Instance* inst = as_inst(p);
   if (!inst) return;
@@ -589,9 +610,25 @@ SQRL_API void square_send_mouse_move(square_instance* p, float x, float y) {
   Node* effective = nullptr;
   for (Node* n = hit; n; n = n->parent)
     if (n->type == N_ELEMENT) { effective = n; break; }
+  if (inst->sel_dragging) {
+    Node* tn = nullptr;
+    int toff = 0;
+    if (inst->root_box && hit_text_pos(inst->root_box, x, y + inst->scroll_y, &tn, &toff)) {
+      if (tn != inst->sel.focus || toff != inst->sel.focus_off) {
+        inst->sel.focus = tn;
+        inst->sel.focus_off = toff;
+        inst->sel_dirty = true;
+      }
+    }
+  }
   if (effective != g_hover_node) {
+    {
+      std::lock_guard<std::mutex> dlk(inst->dirty_mtx);
+      if (g_hover_node) inst->dirty_nodes.push_back(g_hover_node);
+      if (effective) inst->dirty_nodes.push_back(effective);
+    }
     g_hover_node = effective;
-    inst->dirty = true; /* recompute styles for :hover */
+    inst->dirty = true; /* recompute styles for :hover (incremental) */
   }
 }
 
@@ -696,24 +733,64 @@ void fire_queued_clicks(Instance* inst) {
 
 } /* namespace sqrl */
 
+SQRL_API void square_send_mouse_down(square_instance* p, float x, float y, int button) {
+  Instance* inst = as_inst(p);
+  if (!inst || button != 0) return;
+  std::lock_guard<std::mutex> doclk(inst->doc_mtx);
+  if (square_scrollbar_hit(p, (int)x)) return;
+  inst->press_valid = true;
+  inst->press_x = x;
+  inst->press_y = y;
+  Node* tn = nullptr;
+  int toff = 0;
+  if (inst->root_box && hit_text_pos(inst->root_box, x, y + inst->scroll_y, &tn, &toff)) {
+    inst->sel.anchor = tn;
+    inst->sel.anchor_off = toff;
+    inst->sel.focus = tn;
+    inst->sel.focus_off = toff;
+    inst->sel_dragging = true;
+    inst->sel_dirty = true;
+  } else {
+    inst->sel_dragging = false;
+    if (inst->sel.anchor) {
+      inst->sel = TextSelection{};
+      inst->sel_dirty = true;
+    }
+  }
+}
+
 SQRL_API int square_send_click(square_instance* p, float x, float y, int button) {
   Instance* inst = as_inst(p);
   if (!inst || button != 0) return 0;
   int nav_started = 0;
+  bool was_dragging = inst->sel_dragging;
+  bool is_click = false;
   {
     std::lock_guard<std::mutex> doclk(inst->doc_mtx);
-    if (square_scrollbar_hit(p, (int)x)) return 0; /* over scrollbar, not page */
-    Node* hit = hit_test_page(inst, x, y + inst->scroll_y); /* screen y -> page y */
-    Node* n = nullptr;
-    for (Node* cur = hit; cur; cur = cur->parent) {
-      if (cur->type == N_ELEMENT) { n = cur; break; }
+    if (square_scrollbar_hit(p, (int)x)) return 0;
+    if (was_dragging) {
+      inst->sel_dragging = false;
+      float dx = x - inst->press_x, dy = y - inst->press_y;
+      is_click = !inst->press_valid || (dx * dx + dy * dy <= 9.f);
+      if (is_click) inst->sel = TextSelection{};
+      inst->sel_dirty = true;
+    } else {
+      is_click = true;
     }
-    if (n) {
-      std::lock_guard<std::mutex> lk(inst->js_mtx);
-      int64_t id = node_id_for(n);
-      if (id) {
-        inst->click_queue.push_back({(int)id, x, y});
-        inst->dirty = true;
+    inst->press_valid = false;
+    if (is_click) {
+      Node* hit = hit_test_page(inst, x, y + inst->scroll_y); /* screen y -> page y */
+      Node* n = nullptr;
+      for (Node* cur = hit; cur; cur = cur->parent) {
+        if (cur->type == N_ELEMENT) { n = cur; break; }
+      }
+      if (n) {
+        std::lock_guard<std::mutex> lk(inst->js_mtx);
+        int64_t id = node_id_for(n);
+        if (id) {
+          inst->click_queue.push_back({(int)id, x, y});
+          inst->dirty = true;
+        }
       }
     }
   }

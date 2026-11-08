@@ -24,7 +24,43 @@ struct PaintCtx {
   RoundedClip rc;
   float alpha = 1;
   LayoutCtx* lc = nullptr;
+  const TextSelection* sel = nullptr;
 };
+
+static bool text_sel_range(const TextSelection* sel, const Node* tn, size_t len, size_t* c0,
+                           size_t* c1);
+
+static void paint_selected_text(Surface& s, const InlineFrag& f, PaintCtx& ctx) {
+  size_t c0 = 0, c1 = 0;
+  if (!text_sel_range(ctx.sel, f.node, f.run.text.size(), &c0, &c1) || c1 <= c0) return;
+  auto prefix_x = [&](int k) {
+    if (k <= 0) return 0.f;
+    std::vector<GlyphPos> g;
+    if (f.run.font) font_shape(f.run.font, f.run.text.c_str(), f.run.spacing, &g);
+    if (g.empty()) return 0.f;
+    if ((size_t)k >= g.size())
+      return font_measure_text(f.run.font, f.run.text.c_str(), f.run.spacing);
+    return g[k].x;
+  };
+  float xa = f.run.x + prefix_x((int)c0);
+  float xb = f.run.x + prefix_x((int)c1);
+  Color sbg{120, 26, 115, 232};
+  bool have_scol = false;
+  Color scol;
+  if (f.node && f.node->sel_style) {
+    if (f.node->sel_style->bg_color.a > 0) sbg = f.node->sel_style->bg_color;
+    scol = f.node->sel_style->color;
+    have_scol = c0 == 0 && c1 == f.run.text.size();
+  }
+  Rect hl{xa, f.rect.y, std::max(1.f, xb - xa), f.rect.h};
+  gfx_fill_rect(s, hl, sbg, nullptr, &ctx.clip, ctx.rc.active ? &ctx.rc : nullptr);
+  if (have_scol) {
+    std::vector<GlyphPos> glyphs;
+    font_shape(f.run.font, f.run.text.c_str(), f.run.spacing, &glyphs);
+    gfx_draw_glyphs(s, f.run.font, f.run.x, f.run.y, glyphs, scol, ctx.alpha * f.run.alpha,
+                    &ctx.clip);
+  }
+}
 
 static void paint_box(Box* b, PaintCtx& ctx);
 static void paint_frags(Box* container, PaintCtx& ctx);
@@ -61,6 +97,55 @@ static inline uint32_t blend_src_over_public(uint32_t d, uint32_t s) {
   return (oa << 24) | (orr << 16) | (ogg << 8) | obb;
 }
 
+
+/* document order comparison for selection ranges (-1 a first, 0 same, 1 after) */
+static int node_order_cmp(const Node* a, const Node* b) {
+  if (a == b) return 0;
+  if (!a || !b) return a ? 1 : -1;
+  std::vector<int> pa, pb;
+  for (const Node* n = a; n; n = n->parent) pa.push_back(n->child_index());
+  for (const Node* n = b; n; n = n->parent) pb.push_back(n->child_index());
+  size_t i = pa.size(), j = pb.size();
+  while (i > 0 && j > 0) {
+    i--;
+    j--;
+    if (pa[i] != pb[j]) return pa[i] < pb[j] ? -1 : 1;
+  }
+  if (i == 0 && j == 0) return 0;
+  return i == 0 ? -1 : 1;
+}
+
+static bool text_sel_range(const TextSelection* sel, const Node* tn, size_t len, size_t* c0,
+                           size_t* c1) {
+  *c0 = 0;
+  *c1 = 0;
+  if (!sel || !sel->anchor || !sel->focus || !tn || len == 0) return false;
+  if (tn != sel->anchor && tn != sel->focus) {
+    int ord = node_order_cmp(sel->anchor, sel->focus);
+    const Node* first = ord <= 0 ? sel->anchor : sel->focus;
+    const Node* last = ord <= 0 ? sel->focus : sel->anchor;
+    if (node_order_cmp(tn, first) > 0 && node_order_cmp(tn, last) < 0) {
+      *c0 = 0;
+      *c1 = len;
+      return true;
+    }
+    return false;
+  }
+  int ord = node_order_cmp(sel->anchor, sel->focus);
+  const Node* first = ord <= 0 ? sel->anchor : sel->focus;
+  int first_off = ord <= 0 ? sel->anchor_off : sel->focus_off;
+  const Node* last = ord <= 0 ? sel->focus : sel->anchor;
+  int last_off = ord <= 0 ? sel->focus_off : sel->anchor_off;
+  bool is_first = tn == first;
+  bool is_last = tn == last;
+  size_t s0 = is_first ? (size_t)std::max(0, first_off) : 0;
+  size_t s1 = is_last ? (size_t)std::min((int)len, std::max(0, last_off)) : len;
+  if (s1 <= s0) return false;
+  *c0 = s0;
+  *c1 = s1;
+  return true;
+}
+
 static void paint_frags(Box* container, PaintCtx& ctx) {
   LayoutCtx& lc = *ctx.lc;
   g_painted_frags += (int)container->frags.size();
@@ -73,8 +158,17 @@ static void paint_frags(Box* container, PaintCtx& ctx) {
     if (f.kind == InlineFrag::F_TEXT) {
       std::vector<GlyphPos> glyphs;
       if (f.run.font) {
+        paint_selected_text(s, f, ctx);
         font_shape(f.run.font, f.run.text.c_str(), f.run.spacing, &glyphs);
-        gfx_draw_glyphs(s, f.run.font, f.run.x, f.run.y, glyphs, f.run.color,
+        Color run_col = f.run.color;
+        {
+          size_t c0 = 0, c1 = 0;
+          if (ctx.sel && f.node && f.node->sel_style && f.node->sel_style->color.a > 0 &&
+              text_sel_range(ctx.sel, f.node, f.run.text.size(), &c0, &c1) && c0 == 0 &&
+              c1 == f.run.text.size())
+            run_col = f.node->sel_style->color;
+        }
+        gfx_draw_glyphs(s, f.run.font, f.run.x, f.run.y, glyphs, run_col,
                         ctx.alpha * f.run.alpha, &ctx.clip);
         /* decorations */
         if (f.run.deco & 1) {
@@ -517,7 +611,7 @@ static void draw_scrollbar(Surface& s, const Document* doc, Box* root, float scr
 }
 
 void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images,
-                    float scroll_y) {
+                    float scroll_y, const TextSelection* sel) {
   g_painted_boxes = g_painted_frags = g_painted_images = 0;
   if (getenv("SQRL_DUMP_TREE") && root) dump_box_tree(root, 0, 4);
   LayoutCtx lc;
@@ -533,6 +627,7 @@ void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images
   ctx.rc = RoundedClip{};
   ctx.alpha = 1;
   ctx.lc = &lc;
+  ctx.sel = sel;
   /* canvas background: html then body */
   Color canvas{255, 255, 255, 255};
   if (doc->html && doc->html->cs && doc->html->cs->bg_color.a > 0) canvas = doc->html->cs->bg_color;

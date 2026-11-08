@@ -196,6 +196,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         InvalidateRect(hwnd, &rc, FALSE);
         return 0;
       }
+      if (y >= TOOLBAR_H) square_send_mouse_down(g_ui.inst, x, y - TOOLBAR_H, 0);
       break; /* normal page click: handled on WM_LBUTTONUP */
     }
     case WM_LBUTTONUP: {

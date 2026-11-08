@@ -43,7 +43,12 @@ char* module_normalize(JSContext* ctx, const char* base_name, const char* name, 
 }
 
 static std::unordered_map<std::string, std::string> g_module_cache;
+
 static std::mutex g_module_mtx;
+void js_module_cache_clear() {
+  std::lock_guard<std::mutex> lk(g_module_mtx);
+  g_module_cache.clear();
+}
 
 JSModuleDef* module_loader(JSContext* ctx, const char* module_name, void* opaque) {
   Instance* inst = (Instance*)opaque;

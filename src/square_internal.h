@@ -111,6 +111,7 @@ struct Node {
   std::vector<Attr> attrs;
   ComputedStyle* cs = nullptr;   /* computed style (elements) */
   ComputedStyle* pseudo[2] = {nullptr, nullptr}; /* ::before, ::after */
+  ComputedStyle* sel_style = nullptr;            /* ::selection */
   Box* box = nullptr;            /* generated box */
   bool needs_style = true;
   bool in_svg = false;           /* inside <svg> subtree */
@@ -557,6 +558,14 @@ bool gfx_write_png(const char* path, const uint8_t* bgra, int w, int h, int stri
 /* log helper used by all modules (set by platform) */
 void engine_log(int level, const char* fmt, ...);
 
+/* text selection state (byte offset into a text node's data) */
+struct TextSelection {
+  Node* anchor = nullptr;
+  int anchor_off = 0;
+  Node* focus = nullptr;
+  int focus_off = 0;
+};
+
 /* ============================ layout entry (square_layout_*.cpp) ============================ */
 struct ImageCacheView {
   /* returns a COPY (the underlying map may rehash while pool threads decode) */
@@ -580,7 +589,7 @@ void free_box_tree(Box* b);
 void offset_box_recursive(Box* b, float dx, float dy);
 /* paint whole document into surface */
 void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images,
-                    float scroll_y = 0);
+                    float scroll_y = 0, const TextSelection* sel = nullptr);
 /* animation-only style update: re-evaluates keyframe values on the existing
  * computed styles WITHOUT the full selector cascade (cheap enough per frame) */
 void style_reanimate(Document* doc, int vw, int vh);
@@ -608,6 +617,8 @@ void css_parse_stylesheet(const std::string& css, StyleSheet* out, int vw, int v
 void style_tree(Document* doc, int vw, int vh);
 /* cascade recompute for one subtree (parent must already be styled) */
 void style_subtree(Document* doc, Node* root, int vw, int vh);
+/* restyle one element without recursing into children (incremental hover path) */
+void style_node_single(Document* doc, Node* n, int vw, int vh);
 /* serialize subtree back to html (innerHTML / svg export) */
 std::string serialize_html(const Node* n);
 /* free a detached node subtree */

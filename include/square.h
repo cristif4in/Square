@@ -120,6 +120,7 @@ SQRL_API int  square_save_png(square_instance* inst, const char* path,
  * navigation. Coordinates are CSS px relative to the viewport.
  * square_send_click returns 1 when the click triggered a navigation. */
 SQRL_API void square_send_mouse_move(square_instance* inst, float x, float y);
+SQRL_API void square_send_mouse_down(square_instance* inst, float x, float y, int button);
 SQRL_API void square_send_mouse_leave(square_instance* inst);
 SQRL_API int  square_send_click(square_instance* inst, float x, float y, int button);
 

@@ -882,6 +882,7 @@ struct UaSheet {
       "td,th{display:table-cell;padding:1px;vertical-align:middle}"
       "th{font-weight:700;text-align:center}"
       "legend,label,option,optgroup{display:block}"
+      "mark{background-color:#ff0;color:#000}"
       "code,tt,kbd,samp,pre{font-family:monospace}"
       "pre{white-space:pre;margin:1em 0}"
       "blockquote{margin:1em 40px}"
@@ -966,7 +967,7 @@ static void sort_rules(std::vector<MatchedRule>* rules) {
 }
 
 static void compute_style_for(Node* el, const ComputedStyle* parent, const CustomProps* parent_vars,
-                              const StyleSheet& sheet, float rem, int vw, int vh);
+                              const StyleSheet& sheet, float rem, int vw, int vh, bool recurse = true);
 
 void style_tree(Document* doc, int vw, int vh) {
   ua_sheet(); /* ensure built */
@@ -1194,7 +1195,7 @@ static void apply_transitions(Node* el, ComputedStyle* cs) {
 }
 
 static void compute_style_for(Node* el, const ComputedStyle* parent, const CustomProps* parent_vars,
-                              const StyleSheet& sheet, float rem, int vw, int vh) {
+                              const StyleSheet& sheet, float rem, int vw, int vh, bool recurse) {
   /* clear old */
   if (el->cs) { delete el->cs; el->cs = nullptr; }
   ComputedStyle* cs = new ComputedStyle();
@@ -1320,10 +1321,44 @@ static void compute_style_for(Node* el, const ComputedStyle* parent, const Custo
     el->pseudo[pe] = pcs;
   }
 
-  /* recurse children */
-  for (Node* c : el->children) {
-    if (c->type == N_ELEMENT) compute_style_for(c, cs, &own_vars, sheet, rem, vw, vh);
+  /* ::selection pseudo-element */
+  {
+    std::vector<MatchedRule> sm;
+    collect_pseudo_rules(el, "selection", sheet, &sm);
+    if (el->sel_style) { delete el->sel_style; el->sel_style = nullptr; }
+    if (!sm.empty()) {
+      ComputedStyle* scs = new ComputedStyle();
+      init_computed(scs, cs);
+      ResolveCtx rc3;
+      rc3.vars = &own_vars;
+      rc3.rem = rem;
+      rc3.em = cs->font_size;
+      rc3.current_color = cs->color;
+      std::vector<Pending> spending;
+      for (auto& m : sm)
+        for (auto& d : m.rule->decls) spending.push_back({&d.prop, &d.value, d.important});
+      std::stable_sort(spending.begin(), spending.end(), [](const Pending& a, const Pending& b) {
+        return a.important < b.important;
+      });
+      for (auto& p : spending) apply_declaration(scs, *p.prop, *p.val, rc3, nullptr);
+      el->sel_style = scs;
+    }
   }
+
+  /* recurse children */
+  if (recurse) {
+    for (Node* c : el->children) {
+      if (c->type == N_ELEMENT) compute_style_for(c, cs, &own_vars, sheet, rem, vw, vh);
+    }
+  }
+}
+
+/* restyle a single element (no recursion): used by the incremental hover path */
+void style_node_single(Document* doc, Node* n, int vw, int vh) {
+  if (!doc || !n || n->type != N_ELEMENT) return;
+  ComputedStyle* parent_cs = n->parent && n->parent->cs ? n->parent->cs : nullptr;
+  if (!parent_cs) return;
+  compute_style_for(n, parent_cs, &doc->root_vars, doc->sheet, doc->root_font_size, vw, vh, false);
 }
 
 
