@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <cctype>
 #include <cstdarg>
+#include <cstring>
 #include <cstdlib>
 #include <ctime>
 #include <deque>
@@ -387,6 +388,10 @@ class SQNode {
   blur() {}
   click() {}
   scrollIntoView() {}
+  submit() {
+    if (String(this.tagName || '').toLowerCase() === 'form') __sqSubmitForm(this);
+  }
+  requestSubmit() { this.submit(); }
   get value() { return this.getAttribute('value') || ''; }
   set value(v) { this.setAttribute('value', v); }
   get checked() { return this.hasAttribute('checked'); }
@@ -603,19 +608,111 @@ class MutationObserver {
   disconnect() {}
   takeRecords() { return []; }
 }
-class IntersectionObserver {
-  constructor(cb) { this._cb = cb; }
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-  takeRecords() { return []; }
+let __obsAny = false;
+const __obsResize = [];
+const __obsIntersect = [];
+function __sqRectOf(node) {
+  if (!node || node._ptr === undefined || node._ptr === null) return { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 };
+  const r = C.rect(node._ptr);
+  return { x: r[0], y: r[1], width: r[2], height: r[3], top: r[1], left: r[0], right: r[0] + r[2], bottom: r[1] + r[3] };
+}
+function __sqRectEq(a, b) {
+  return !!a && !!b && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
 class ResizeObserver {
-  constructor(cb) { this._cb = cb; }
-  observe() {}
-  unobserve() {}
-  disconnect() {}
+  constructor(cb) {
+    this._cb = cb;
+    this._targets = new Map();
+    __obsResize.push(this);
+  }
+  observe(target) {
+    if (!target || target._ptr === undefined || target._ptr === null) return;
+    this._targets.set(target, null);
+    __obsAny = true;
+  }
+  unobserve(target) { this._targets.delete(target); }
+  disconnect() { this._targets.clear(); }
 }
+class IntersectionObserver {
+  constructor(cb, options) {
+    this._cb = cb;
+    this._targets = new Map();
+    this._pending = [];
+    let th = options && options.threshold;
+    if (th === undefined || th === null) th = 0;
+    if (!Array.isArray(th)) th = [th];
+    this._thresholds = th.map(Number).filter(n => n >= 0 && n <= 1).sort((a, b) => a - b);
+    if (!this._thresholds.length) this._thresholds = [0];
+    this.thresholds = this._thresholds.slice();
+    this.root = (options && options.root) || null;
+    this.rootMargin = (options && options.rootMargin) || '0px';
+    __obsIntersect.push(this);
+  }
+  observe(target) {
+    if (!target || target._ptr === undefined || target._ptr === null) return;
+    this._targets.set(target, null);
+    __obsAny = true;
+  }
+  unobserve(target) { this._targets.delete(target); }
+  disconnect() { this._targets.clear(); this._pending.length = 0; }
+  takeRecords() { const r = this._pending; this._pending = []; return r; }
+}
+globalThis.__sq_pump_observers = function() {
+  if (!__obsAny) return;
+  const jobs = [];
+  for (const ro of __obsResize) {
+    const entries = [];
+    for (const [t, last] of ro._targets) {
+      const r = __sqRectOf(t);
+      if (!__sqRectEq(r, last)) {
+        ro._targets.set(t, r);
+        entries.push({
+          target: t,
+          contentRect: { x: 0, y: 0, width: r.width, height: r.height, top: 0, left: 0, right: r.width, bottom: r.height },
+          borderBoxSize: [{ inlineSize: r.width, blockSize: r.height }],
+          contentBoxSize: [{ inlineSize: r.width, blockSize: r.height }],
+          devicePixelContentBoxSize: [{ inlineSize: r.width, blockSize: r.height }]
+        });
+      }
+    }
+    if (entries.length) jobs.push([ro._cb, entries, ro]);
+  }
+  const vw = globalThis.innerWidth || 0;
+  const vh = globalThis.innerHeight || 0;
+  const sy = globalThis.__sq_scroll_y || 0;
+  const root = { x: 0, y: sy, width: vw, height: vh, top: sy, left: 0, right: vw, bottom: sy + vh };
+  for (const io of __obsIntersect) {
+    const entries = [];
+    for (const [t, lastKey] of io._targets) {
+      const r = __sqRectOf(t);
+      const ix = Math.max(0, Math.min(r.right, root.right) - Math.max(r.left, root.left));
+      const iy = Math.max(0, Math.min(r.bottom, root.bottom) - Math.max(r.top, root.top));
+      const isect = ix > 0 && iy > 0;
+      const area = r.width * r.height;
+      const ratio = isect && area > 0 ? (ix * iy) / area : 0;
+      let key = isect ? '1' : '0';
+      for (const th of io._thresholds) if (th > 0 && ratio >= th) key += '|' + th;
+      if (key !== lastKey) {
+        io._targets.set(t, key);
+        const rx = Math.max(r.left, root.left);
+        const ry = Math.max(r.top, root.top);
+        entries.push({
+          target: t,
+          isIntersecting: isect,
+          intersectionRatio: ratio,
+          intersectionRect: { x: rx, y: ry, width: ix, height: iy, top: ry, left: rx, right: rx + ix, bottom: ry + iy },
+          boundingClientRect: r,
+          rootBounds: root,
+          time: globalThis.performance.now()
+        });
+      }
+    }
+    if (entries.length) jobs.push([io._cb, entries, io]);
+  }
+  for (const [cb, entries, obs] of jobs) {
+    queueMicrotask(() => { try { cb(entries, obs); } catch (e) { console.error(e && e.stack || e); } });
+  }
+};
 class PerformanceObserver {
   constructor(cb) { this._cb = cb; }
   observe() {}
@@ -692,6 +789,89 @@ class URLShim {
   static revokeObjectURL() {}
 }
 
+// ---- forms (GET submission) ----
+function __sqFormElements(form) {
+  const out = [];
+  const walk = (n) => {
+    for (const c of n.children) {
+      const tg = String(c.tagName || '').toLowerCase();
+      if (tg === 'input' || tg === 'select' || tg === 'textarea' || tg === 'button') out.push(c);
+      walk(c);
+    }
+  };
+  walk(form);
+  return out;
+}
+function __sqFormQueryString(form) {
+  const parts = [];
+  for (const el of __sqFormElements(form)) {
+    const name = el.getAttribute('name');
+    if (!name || el.disabled) continue;
+    const tg = String(el.tagName || '').toLowerCase();
+    const ty = String(el.getAttribute('type') || '').toLowerCase();
+    if (tg === 'button' || ty === 'submit' || ty === 'image' || ty === 'reset' || ty === 'file') continue;
+    let val;
+    if (tg === 'select') {
+      const opts = el.querySelectorAll('option');
+      let chosen = null;
+      for (const o of opts) { if (o.hasAttribute('selected')) { chosen = o; break; } }
+      if (!chosen && opts.length) chosen = opts[0];
+      val = chosen ? chosen.getAttribute('value') : '';
+      if (val === null || val === undefined) val = chosen ? chosen.textContent : '';
+    } else if (tg === 'textarea') {
+      val = el.textContent;
+    } else if (ty === 'checkbox' || ty === 'radio') {
+      if (!el.checked) continue;
+      val = el.getAttribute('value');
+      if (val === null || val === undefined || val === '') val = 'on';
+    } else {
+      val = el.value;
+    }
+    parts.push(encodeURIComponent(name) + '=' + encodeURIComponent(val === null || val === undefined ? '' : String(val)));
+  }
+  return parts.join('&');
+}
+function __sqSubmitForm(form) {
+  if (form.__sqSubmitting) return;
+  form.__sqSubmitting = true;
+  try {
+    const method = String(form.getAttribute('method') || 'get').toLowerCase();
+    if (method === 'post') console.warn('Form POST is not supported; submitting as GET');
+    let action = form.getAttribute('action');
+    if (!action) action = globalThis.location.href;
+    action = new URLShim(action, globalThis.location.href).href;
+    const qs = __sqFormQueryString(form);
+    const hi = action.indexOf('#');
+    if (hi >= 0) {
+      let pre = action.slice(0, hi);
+      if (qs) pre += (pre.includes('?') ? '&' : '?') + qs;
+      action = pre + action.slice(hi);
+    } else if (qs) {
+      action += (action.includes('?') ? '&' : '?') + qs;
+    }
+    globalThis.__sq_navigate(action);
+  } finally { form.__sqSubmitting = false; }
+}
+function __sqClickDefault(node, ev) {
+  if (!ev || ev.defaultPrevented) return;
+  const el = ev.target || node;
+  if (!el || el._ptr === undefined) return;
+  const tg = String(el.tagName || '').toLowerCase();
+  const ty = String(el.getAttribute('type') || '').toLowerCase();
+  const isSubmit = (tg === 'button' && (ty === '' || ty === 'submit')) ||
+    (tg === 'input' && (ty === 'submit' || ty === 'image'));
+  if (!isSubmit) return;
+  let f = el;
+  while (f) {
+    if (String(f.tagName || '').toLowerCase() === 'form') break;
+    f = f.parentElement;
+  }
+  if (f) {
+    ev.preventDefault();
+    __sqSubmitForm(f);
+  }
+}
+
 // install globals
 const document = new SQDocument();
 globalThis.document = document;
@@ -699,6 +879,11 @@ globalThis.Node = SQNode;
 globalThis.Element = SQNode;
 globalThis.HTMLElement = SQNode;
 globalThis.HTMLIFrameElement = SQNode;
+globalThis.HTMLFormElement = SQNode;
+globalThis.HTMLInputElement = SQNode;
+globalThis.HTMLSelectElement = SQNode;
+globalThis.HTMLTextAreaElement = SQNode;
+globalThis.HTMLButtonElement = SQNode;
 globalThis.Document = SQDocument;
 globalThis.DocumentFragment = SQFragment;
 globalThis.Event = SQEvent;
@@ -929,7 +1114,11 @@ globalThis.__sq_window_load = function() {
   } catch (e) { console.error(e && e.stack || e); }
 };
 /* expose internals for the C click dispatcher */
-globalThis.__sqDispatch = dispatchImpl;
+globalThis.__sqDispatch = function(node, ev) {
+  const r = dispatchImpl(node, ev);
+  try { __sqClickDefault(node, ev); } catch (e) { console.error(e && e.stack || e); }
+  return r;
+};
 
 /* ---- additional standard globals (YouTube / Polymer / analytics) ---- */
 globalThis.NodeFilter = {
@@ -1192,6 +1381,14 @@ void pump_raf(Instance* inst) {
     }
     JS_FreeValue(ctx, fn);
   }
+  static const char* obs_code =
+    "globalThis.__sq_pump_observers && globalThis.__sq_pump_observers();";
+  JSValue g = JS_GetGlobalObject(ctx);
+  JS_SetPropertyStr(ctx, g, "__sq_scroll_y", JS_NewInt32(ctx, inst->scroll_y));
+  JS_FreeValue(ctx, g);
+  JSValue r = JS_Eval(ctx, obs_code, strlen(obs_code), "<observers>", JS_EVAL_TYPE_GLOBAL);
+  if (JS_IsException(r)) report_js_exception(inst);
+  JS_FreeValue(ctx, r);
 }
 
 void fire_timers(Instance* inst) {

@@ -104,6 +104,8 @@ struct Instance {
   /* graveyard: DOM nodes removed/replaced stay alive until page teardown
      (old layout boxes/frags may still reference them) */
   std::vector<Node*> graveyard;
+  std::mutex dirty_mtx;
+  std::vector<Node*> dirty_nodes;
 
   /* JS */
   JSRuntime* rt = nullptr;
@@ -161,6 +163,7 @@ int64_t node_id_for(Node* n);
 JSValue wrap_node(JSContext* ctx, Node* n);
 Node* unwrap_node_ctx(JSContext* ctx, JSValueConst v);
 void mark_dirty(Instance* inst);
+void mark_dirty_node(Instance* inst, Node* n);
 void report_js_exception(Instance* inst);
 JSValue js_console_log(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv);
 JSValue make_console(Instance* inst);

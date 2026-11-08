@@ -606,6 +606,8 @@ std::vector<Node*> html_parse_fragment(const std::string& html);
 void css_parse_stylesheet(const std::string& css, StyleSheet* out, int vw, int vh);
 /* cascade: compute styles for the whole tree (clears old computed styles) */
 void style_tree(Document* doc, int vw, int vh);
+/* cascade recompute for one subtree (parent must already be styled) */
+void style_subtree(Document* doc, Node* root, int vw, int vh);
 /* serialize subtree back to html (innerHTML / svg export) */
 std::string serialize_html(const Node* n);
 /* free a detached node subtree */

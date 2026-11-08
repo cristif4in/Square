@@ -97,6 +97,14 @@ void mark_dirty(Instance* inst) {
   inst->dirty = true;
 }
 
+void mark_dirty_node(Instance* inst, Node* n) {
+  inst->dirty = true;
+  if (n) {
+    std::lock_guard<std::mutex> lk(inst->dirty_mtx);
+    inst->dirty_nodes.push_back(n);
+  }
+}
+
 JSValue js_create_element(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
   Instance* inst = (Instance*)JS_GetContextOpaque(ctx);
   const char* tag = argc > 0 ? JS_ToCString(ctx, argv[0]) : "div";
@@ -149,7 +157,7 @@ JSValue js_append_child(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
   }
   child->parent = parent;
   parent->children.push_back(child);
-  mark_dirty(inst);
+mark_dirty_node(inst, parent);
   return JS_DupValue(ctx, argv[1]);
 }
 
@@ -170,7 +178,7 @@ JSValue js_insert_before(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
     parent->children.insert(it, child);
   else
     parent->children.push_back(child);
-  mark_dirty(inst);
+mark_dirty_node(inst, parent);
   return JS_DupValue(ctx, argv[1]);
 }
 
@@ -183,7 +191,7 @@ JSValue js_remove_child(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
   auto& sibs = parent->children;
   sibs.erase(std::remove(sibs.begin(), sibs.end(), child), sibs.end());
   child->parent = nullptr;
-  mark_dirty(inst);
+mark_dirty_node(inst, parent);
   return JS_DupValue(ctx, argv[1]);
 }
 
@@ -327,7 +335,7 @@ JSValue js_set_attr(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) 
   n->set_attr(plat_lc(name), val ? val : "");
   JS_FreeCString(ctx, name);
   if (val) JS_FreeCString(ctx, val);
-  mark_dirty(inst);
+mark_dirty_node(inst, n);
   return JS_UNDEFINED;
 }
 
@@ -337,7 +345,7 @@ JSValue js_remove_attr(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
   const char* name = argc > 1 ? JS_ToCString(ctx, argv[1]) : nullptr;
   if (n && name) {
     n->remove_attr(plat_lc(name));
-    mark_dirty(inst);
+mark_dirty_node(inst, n);
   }
   if (name) JS_FreeCString(ctx, name);
   return JS_UNDEFINED;
@@ -370,7 +378,7 @@ JSValue js_set_text(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) 
         n->children.push_back(t);
       }
     }
-    mark_dirty(inst);
+mark_dirty_node(inst, n);
   }
   if (val) JS_FreeCString(ctx, val);
   return JS_UNDEFINED;
@@ -403,7 +411,7 @@ JSValue js_set_inner_html(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
         n->children.push_back(c);
       }
     }
-    mark_dirty(inst);
+mark_dirty_node(inst, n);
   }
   if (val) JS_FreeCString(ctx, val);
   return JS_UNDEFINED;

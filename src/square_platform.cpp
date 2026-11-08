@@ -5,6 +5,7 @@
  *  (public C API + input handling live in square_platform_api.cpp)
  * ===================================================================== */
 #include "square_platform_internal.h"
+#include "square_layout_internal.h"
 
 #include <algorithm>
 #include <chrono>
@@ -146,7 +147,14 @@ static void cache_sweep(const std::string& dir) {
 #endif
 }
 
-static bool cache_lookup(const std::string& url, std::vector<uint8_t>* out) {
+struct CacheEntry {
+  std::vector<uint8_t> body;
+  int64_t ts = 0;
+  int max_age = 0;
+  std::string etag, last_mod;
+};
+
+static bool cache_lookup(const std::string& url, CacheEntry* out) {
   if (url.rfind("http", 0) != 0) return false;
   std::string path = cache_path(cache_dir(), url);
   FILE* f = fopen(path.c_str(), "rb");
@@ -163,16 +171,41 @@ static bool cache_lookup(const std::string& url, std::vector<uint8_t>* out) {
     cache_remove(path);
     return false;
   }
-  size_t body_at = all.find('\n') + 1;
-  if (body_at >= all.size()) {
+  size_t eol = all.find('\n');
+  size_t body_at = eol + 1;
+  if (eol == std::string::npos || body_at >= all.size()) {
     cache_remove(path);
     return false;
   }
-  out->assign(all.begin() + body_at, all.end());
+  out->ts = ts;
+  out->max_age = kCacheMaxAgeSec;
+  out->etag.clear();
+  out->last_mod.clear();
+  std::string head = all.substr(6, eol - 6);
+  if (!head.empty()) {
+    auto unflat = [](std::string v) {
+      std::string rep;
+      for (char c : v) rep += (c == '\x01' ? ' ' : c);
+      return rep;
+    };
+    size_t sp1 = head.find(' ');
+    if (sp1 != std::string::npos) {
+      out->max_age = atoi(head.substr(sp1 + 1).c_str());
+      size_t sp2 = head.find(' ', sp1 + 1);
+      if (sp2 != std::string::npos) {
+        size_t sp3 = head.find(' ', sp2 + 1);
+        out->etag = unflat(sp3 == std::string::npos ? head.substr(sp2 + 1)
+                                                    : head.substr(sp2 + 1, sp3 - sp2 - 1));
+        if (sp3 != std::string::npos) out->last_mod = unflat(head.substr(sp3 + 1));
+      }
+    }
+  }
+  out->body.assign(all.begin() + body_at, all.end());
   return true;
 }
 
-static void cache_store(const std::string& url, const std::vector<uint8_t>& body) {
+static void cache_store(const std::string& url, const std::vector<uint8_t>& body, int max_age,
+                        const std::string& etag, const std::string& last_mod) {
   if (url.rfind("http", 0) != 0 || body.empty()) return;
   static bool swept = false;
   std::string dir = cache_dir();
@@ -181,6 +214,11 @@ static void cache_store(const std::string& url, const std::vector<uint8_t>& body
     cache_mkdir(dir);
     cache_sweep(dir);
   }
+  auto flat = [](std::string v) {
+    for (auto& c : v)
+      if (c == ' ' || c == '\n' || c == '\r') c = '\x01';
+    return v;
+  };
   std::string path = cache_path(dir, url);
   FILE* f = fopen(path.c_str(), "wb");
   if (!f) {
@@ -188,7 +226,8 @@ static void cache_store(const std::string& url, const std::vector<uint8_t>& body
     f = fopen(path.c_str(), "wb");
   }
   if (!f) return;
-  fprintf(f, "SQRL1 %lld\n", (long long)time(nullptr));
+  fprintf(f, "SQRL2 %lld %d %s %s\n", (long long)time(nullptr), max_age, flat(etag).c_str(),
+          flat(last_mod).c_str());
   fwrite(body.data(), 1, body.size(), f);
   fclose(f);
 }
@@ -229,14 +268,43 @@ HttpResult fetch_sync(Instance* inst, const std::string& url, const char* dest) 
   bool is_style = dest_s == "style";
   bool is_script = dest_s == "script";
   if (is_img) {
-    std::vector<uint8_t> cached;
-    if (cache_lookup(url, &cached)) {
-      HttpResult r;
-      r.ok = true;
-      r.status = 200;
-      r.body = std::move(cached);
-      r.final_url = url;
-      return r;
+    CacheEntry ce;
+    if (cache_lookup(url, &ce)) {
+      int64_t age = (int64_t)time(nullptr) - ce.ts;
+      bool fresh = age <= ce.max_age;
+      bool revalidatable = !ce.etag.empty() || !ce.last_mod.empty();
+      auto cached_result = [&]() {
+        HttpResult r;
+        r.ok = true;
+        r.status = 200;
+        r.body = ce.body;
+        r.final_url = url;
+        return r;
+      };
+      if (!fresh && revalidatable) {
+        std::vector<HttpHeader> vh;
+        vh.push_back({"User-Agent", inst->ua});
+        if (!ce.etag.empty()) vh.push_back({"If-None-Match", ce.etag});
+        if (!ce.last_mod.empty()) vh.push_back({"If-Modified-Since", ce.last_mod});
+        HttpResult rr = net_http_get(url, vh, "GET", 15000, &inst->jar, &inst->cancel);
+        if (rr.status == 304) {
+          cache_store(url, ce.body, ce.max_age, ce.etag, ce.last_mod);
+          return cached_result();
+        }
+        if (rr.ok && rr.status == 200 && !rr.body.empty()) {
+          int ma = 86400;
+          std::string etag = rr.header("ETag");
+          std::string lm = rr.header("Last-Modified");
+          std::string cc = plat_lc(rr.header("Cache-Control"));
+          size_t mp = cc.find("max-age=");
+          if (mp != std::string::npos) ma = atoi(cc.c_str() + mp + 8);
+          cache_store(url, rr.body, ma, etag, lm);
+          rr.final_url = url;
+          return rr;
+        }
+        return cached_result();
+      }
+      if (fresh) return cached_result();
     }
   }
   std::vector<HttpHeader> hdrs;
@@ -313,15 +381,93 @@ HttpResult fetch_sync(Instance* inst, const std::string& url, const char* dest) 
     engine_log(2, "[retry] %s (attempt %d, status %d)", url.c_str(), attempt + 1, r.status);
   }
   if (is_img && r.ok && r.status == 200 && !looks_blocked(r)) {
-    cache_store(url, r.body);
+    std::string cc = plat_lc(r.header("Cache-Control"));
+    if (cc.find("no-store") == std::string::npos) {
+      int ma = 86400;
+      size_t mp = cc.find("max-age=");
+      if (mp != std::string::npos)
+        ma = atoi(cc.c_str() + mp + 8);
+      else if (cc.find("no-cache") != std::string::npos)
+        ma = 0;
+      cache_store(url, r.body, ma, r.header("ETag"), r.header("Last-Modified"));
+    }
   }
   return r;
 }
 /* ============================ style/layout/paint refresh ============================ */
+static void paint_current_frame(Instance* inst, int vw, int vh) {
+  inst->page_h = inst->root_box ? (int)layout_page_height(inst->root_box) : vh;
+  int scroll_max = inst->page_h - vh;
+  if (scroll_max < 0) scroll_max = 0;
+  if (inst->scroll_y > scroll_max) inst->scroll_y = scroll_max;
+  {
+    std::lock_guard<std::mutex> plk(inst->paint_mtx);
+    if (inst->latest.w != vw || inst->latest.h != vh) {
+      inst->latest.free_pix();
+      inst->latest.alloc(vw, vh);
+    }
+    if (!getenv("SQRL_NO_PAINT"))
+      paint_document(inst->doc, inst->root_box, &inst->latest, &inst->images, (float)inst->scroll_y);
+  }
+}
+
+static bool relayout_dirty(Instance* inst, const std::vector<Node*>& dirty, int vw, int vh) {
+  Document* doc = inst->doc;
+  if (!doc || !inst->root_box) return false;
+  std::vector<Node*> roots;
+  for (Node* n : dirty) {
+    if (!n || n->type != N_ELEMENT || !n->cs) return false;
+    bool in_doc = false;
+    for (Node* a = n; a; a = a->parent)
+      if (a == doc->body || a == doc->html) { in_doc = true; break; }
+    if (!in_doc) continue;
+    bool covered = false;
+    for (Node* a = n->parent; a; a = a->parent) {
+      if (std::find(dirty.begin(), dirty.end(), a) != dirty.end()) { covered = true; break; }
+    }
+    if (!covered) roots.push_back(n);
+  }
+  if (roots.empty()) return true;
+  for (Node* r : roots) style_subtree(doc, r, vw, vh);
+  for (Node* r : roots) {
+    if (!r->box) return false;
+    std::vector<Box*> chain;
+    for (Box* bx = r->box; bx; bx = bx->parent) chain.push_back(bx);
+    if (chain.empty() || chain.back() != inst->root_box) return false;
+    LayoutCtx lc;
+    lc.doc = doc;
+    lc.vw = vw;
+    lc.vh = vh;
+    lc.rem = doc->root_font_size;
+    lc.images = &inst->images;
+    lc.root_box = inst->root_box;
+    for (size_t i = 0; i < chain.size(); i++) {
+      Box* bx = chain[i];
+      if (!bx->node) return false;
+      float ow = bx->w, oh = bx->h, ox = bx->x, oy = bx->y;
+      layout_element(bx, bx->node, lc);
+      if (bx->w == ow && bx->h == oh && bx->x == ox && bx->y == oy) break;
+    }
+  }
+  paint_current_frame(inst, vw, vh);
+  return true;
+}
+
 void refresh_page(Instance* inst) {
   std::lock_guard<std::mutex> lk(inst->mtx);
   if (!inst->doc || !inst->doc->body) return;
   int vw = inst->vw, vh = inst->vh;
+  std::vector<Node*> dirty;
+  {
+    std::lock_guard<std::mutex> dlk(inst->dirty_mtx);
+    dirty.swap(inst->dirty_nodes);
+  }
+  if (!dirty.empty() && !getenv("SQRL_NO_INCR") && !inst->doc->sheet.has_animations) {
+    if (relayout_dirty(inst, dirty, vw, vh)) {
+      inst->dirty = false;
+      return;
+    }
+  }
   style_tree(inst->doc, vw, vh);
   if (getenv("SQRL_NO_LAYOUT")) { inst->dirty = false; return; }
 #ifdef LAYOUT_DEBUG
@@ -352,16 +498,7 @@ void refresh_page(Instance* inst) {
   int scroll_max = inst->page_h - vh;
   if (scroll_max < 0) scroll_max = 0;
   if (inst->scroll_y > scroll_max) inst->scroll_y = scroll_max;
-  /* paint viewport-sized frame at the current scroll offset */
-  {
-    std::lock_guard<std::mutex> plk(inst->paint_mtx);
-    if (inst->latest.w != vw || inst->latest.h != vh) {
-      inst->latest.free_pix();
-      inst->latest.alloc(vw, vh);
-    }
-    if (!getenv("SQRL_NO_PAINT"))
-      paint_document(inst->doc, inst->root_box, &inst->latest, &inst->images, (float)inst->scroll_y);
-  }
+  paint_current_frame(inst, vw, vh);
   inst->dirty = false;
 }
 

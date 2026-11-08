@@ -970,6 +970,16 @@ void style_tree(Document* doc, int vw, int vh) {
   }
 }
 
+void style_subtree(Document* doc, Node* root, int vw, int vh) {
+  if (!doc || !root || root->type != N_ELEMENT) return;
+  ComputedStyle* parent_cs = root->parent && root->parent->cs ? root->parent->cs : nullptr;
+  if (!parent_cs) {
+    style_tree(doc, vw, vh);
+    return;
+  }
+  compute_style_for(root, parent_cs, &doc->root_vars, doc->sheet, doc->root_font_size, vw, vh);
+}
+
 /* ---- animation evaluation ---- */
 static float anim_time_s() {
   using clock = std::chrono::steady_clock;
