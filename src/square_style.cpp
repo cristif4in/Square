@@ -286,9 +286,19 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
         layer.kind = BG_URL;
         CssCursor tc(img);
         layer.url = tc.read_url();
-        cs->bgs.push_back(layer);
+        /* longhand position/size/repeat may already have created a pending
+         * layer: fill it instead of pushing a fresh one */
+        if (!cs->bgs.empty() && cs->bgs.back().kind == BG_NONE && cs->bgs.back().url.empty())
+          cs->bgs.back() = layer;
+        else
+          cs->bgs.push_back(layer);
       } else if (li.find("gradient(") != std::string::npos) {
-        if (parse_gradient(img, &layer, rc)) cs->bgs.push_back(layer);
+        if (parse_gradient(img, &layer, rc)) {
+          if (!cs->bgs.empty() && cs->bgs.back().kind == BG_NONE && cs->bgs.back().url.empty())
+            cs->bgs.back() = layer;
+          else
+            cs->bgs.push_back(layer);
+        }
       }
     }
     return true;

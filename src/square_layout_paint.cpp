@@ -28,6 +28,8 @@ struct PaintCtx {
 
 static void paint_box(Box* b, PaintCtx& ctx);
 static void paint_frags(Box* container, PaintCtx& ctx);
+static void paint_bg_layers(ComputedStyle* cs, const Rect& bounds, PaintCtx& ctx,
+                            const Rect& pad_box, const float rad[4]);
 
 /* blur a region (for backdrop-filter): box blur on RGBA copy */
 static void backdrop_blur_region(Surface& s, const Rect& r, float radius_px) {
@@ -98,6 +100,7 @@ static void paint_frags(Box* container, PaintCtx& ctx) {
         float bw_r = ics->border_style[1] ? res_l(ics->border_width[1], r.w, ics->font_size, lc) : 0;
         if (ics->bg_color.a > 0)
           gfx_fill_rect(s, r, ics->bg_color, rad, &ctx.clip, ctx.rc.active ? &ctx.rc : nullptr);
+        if (!ics->bgs.empty()) paint_bg_layers(ics, r, ctx, r, rad);
         if (bw_t > 0) gfx_fill_rect(s, {r.x, r.y, r.w, bw_t}, ics->border_color[0], nullptr, &ctx.clip, nullptr);
         if (bw_b > 0) gfx_fill_rect(s, {r.x, r.y + r.h - bw_b, r.w, bw_b}, ics->border_color[2], nullptr, &ctx.clip, nullptr);
         if (bw_l > 0) gfx_fill_rect(s, {r.x, r.y, bw_l, r.h}, ics->border_color[3], nullptr, &ctx.clip, nullptr);
@@ -182,15 +185,15 @@ static void paint_frags(Box* container, PaintCtx& ctx) {
   }
 }
 
-static void paint_bg_layers(Box* b, PaintCtx& ctx, const Rect& pad_box, const float rad[4]) {
+static void paint_bg_layers(ComputedStyle* cs, const Rect& bounds, PaintCtx& ctx,
+                            const Rect& pad_box, const float rad[4]) {
   LayoutCtx& lc = *ctx.lc;
   Surface& s = *ctx.s;
-  ComputedStyle* cs = b->cs;
   RoundedClip own_rc;
   bool has_radius = rad[0] > 0 || rad[1] > 0 || rad[2] > 0 || rad[3] > 0;
   if (has_radius) {
     own_rc.active = true;
-    own_rc.bounds = {b->x, b->y, b->w, b->h};
+    own_rc.bounds = bounds;
     memcpy(own_rc.radius, rad, 4 * sizeof(float));
   }
   const RoundedClip* rc = has_radius ? &own_rc : (ctx.rc.active ? &ctx.rc : nullptr);
@@ -320,7 +323,7 @@ static void paint_box(Box* b, PaintCtx& ctx) {
   if (cs->bg_color.a > 0) {
     gfx_fill_rect(ts, pad_box, cs->bg_color, inner_rad, &target.clip, target.rc.active ? &target.rc : nullptr);
   }
-  paint_bg_layers(b, target, pad_box, inner_rad);
+  paint_bg_layers(cs, {b->x, b->y, b->w, b->h}, target, pad_box, inner_rad);
 
   /* replaced element content (block-level img / svg) */
   if (b->node && (b->node->tag == "img" || b->node->tag == "svg")) {

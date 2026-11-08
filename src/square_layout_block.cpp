@@ -145,10 +145,12 @@ float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
       cb->y = 0;
       float ch = layout_element(cb, c, lc);
       float total_h = ch;
-      if (ccs->height.unit != L_AUTO && ccs->height.unit != L_NORMAL)
+      if (ccs->height.unit == L_PCT && b->ch_definite > 0)
+        total_h = ccs->height.val * b->ch_definite / 100.f;
+      else if (ccs->height.unit != L_AUTO && ccs->height.unit != L_NORMAL)
         total_h = res_l(ccs->height, avail_w, em, lc);
       if (ccs->min_h.unit != L_AUTO && ccs->min_h.unit != L_NORMAL)
-        total_h = std::max(total_h, res_l(ccs->min_h, avail_w, em, lc));
+        total_h = std::max(total_h, res_pct_h(ccs->min_h, b->ch_definite, em, lc));
       if (ccs->max_h.unit != L_AUTO && ccs->max_h.unit != L_NORMAL)
         total_h = std::min(total_h, res_l(ccs->max_h, avail_w, em, lc));
       cb->h = total_h;
@@ -238,10 +240,12 @@ float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
       if (!first_done) cb->y = y0;
       float ch = layout_element(cb, c, lc);
       float total_h = ch;
-      if (ccs->height.unit != L_AUTO && ccs->height.unit != L_NORMAL)
+      if (ccs->height.unit == L_PCT && b->ch_definite > 0)
+        total_h = ccs->height.val * b->ch_definite / 100.f;
+      else if (ccs->height.unit != L_AUTO && ccs->height.unit != L_NORMAL)
         total_h = res_l(ccs->height, avail_w, em, lc);
       if (ccs->min_h.unit != L_AUTO && ccs->min_h.unit != L_NORMAL)
-        total_h = std::max(total_h, res_l(ccs->min_h, avail_w, em, lc));
+        total_h = std::max(total_h, res_pct_h(ccs->min_h, b->ch_definite, em, lc));
       if (ccs->max_h.unit != L_AUTO && ccs->max_h.unit != L_NORMAL)
         total_h = std::min(total_h, res_l(ccs->max_h, avail_w, em, lc));
       cb->h = total_h;
@@ -285,9 +289,11 @@ float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
 float layout_element(Box* b, Node* el, LayoutCtx& lc) {
   ComputedStyle* cs = b->cs;
   float content_h = 0;
-  /* definite height for percentage children */
+  /* definite height for percentage children: percentages resolve against
+   * the parent's definite content height (viewport height for the root) */
   if (cs->height.unit != L_AUTO && cs->height.unit != L_NORMAL)
-    b->ch_definite = res_l(cs->height, b->cw, cs->font_size, lc);
+    b->ch_definite = res_pct_h(cs->height, b->parent ? b->parent->ch_definite : (float)lc.vh,
+                               cs->font_size, lc);
   else
     b->ch_definite = 0;
   /* re-layout safety: free + clear previous content (kids/out_of_flow are
@@ -318,7 +324,11 @@ float layout_element(Box* b, Node* el, LayoutCtx& lc) {
       h = attr_h;
       h_from_attr = true;
     } else if (cs->height.unit != L_AUTO && cs->height.unit != L_NORMAL) {
-      h = res_l(cs->height, b->cw, cs->font_size, lc);
+      h = cs->height.unit == L_PCT
+              ? (b->parent && b->parent->ch_definite > 0
+                     ? cs->height.val * b->parent->ch_definite / 100.f
+                     : res_l(cs->height, b->cw, cs->font_size, lc))
+              : res_l(cs->height, b->cw, cs->font_size, lc);
     }
     if (cs->width.unit != L_AUTO && cs->width.unit != L_NORMAL && !h_from_attr && cs->height.unit == L_AUTO)
       h = w * ih / iw; /* width set + height auto → keep intrinsic ratio */
@@ -340,13 +350,20 @@ float layout_element(Box* b, Node* el, LayoutCtx& lc) {
   } else {
     content_h = layout_block_content(b, el, lc);
   }
-  /* clamp by height props */
+  /* clamp by height props: percentages against the parent's definite content
+   * height (auto-height parent: percentage height behaves like auto) */
   float em = cs->font_size;
   float avail_w = b->cw;
-  if (cs->height.unit != L_AUTO && cs->height.unit != L_NORMAL)
-    content_h = res_l(cs->height, avail_w, em, lc);
+  float h_basis = b->parent ? b->parent->ch_definite : (float)lc.vh;
+  if (cs->height.unit != L_AUTO && cs->height.unit != L_NORMAL) {
+    if (cs->height.unit == L_PCT && b->parent && b->parent->ch_definite <= 0) {
+      /* keep content height */
+    } else {
+      content_h = res_pct_h(cs->height, h_basis, em, lc);
+    }
+  }
   if (cs->min_h.unit != L_AUTO && cs->min_h.unit != L_NORMAL)
-    content_h = std::max(content_h, res_l(cs->min_h, avail_w, em, lc));
+    content_h = std::max(content_h, res_pct_h(cs->min_h, h_basis, em, lc));
   if (cs->max_h.unit != L_AUTO && cs->max_h.unit != L_NORMAL)
     content_h = std::min(content_h, res_l(cs->max_h, avail_w, em, lc));
 

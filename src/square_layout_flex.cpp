@@ -47,10 +47,13 @@ static void flex_item_layout_at(FlexItem& it, float item_w, LayoutCtx& lc) {
     bx->cw = std::max(0.f, item_w - bx->pad_l - bx->pad_r - bx->bor_l - bx->bor_r);
     float ch = layout_element(bx, it.node, lc);
     float total = ch + bx->pad_t + bx->pad_b + bx->bor_t + bx->bor_b;
-    if (it.ics->height.unit != L_AUTO && it.ics->height.unit != L_NORMAL)
+    float h_basis = bx->parent ? bx->parent->ch_definite : 0;
+    if (it.ics->height.unit == L_PCT)
+      total = h_basis > 0 ? it.ics->height.val * h_basis / 100.f : total;
+    else if (it.ics->height.unit != L_AUTO && it.ics->height.unit != L_NORMAL)
       total = res_l(it.ics->height, item_w, it.ics->font_size, lc);
     if (it.ics->min_h.unit != L_AUTO && it.ics->min_h.unit != L_NORMAL)
-      total = std::max(total, res_l(it.ics->min_h, item_w, it.ics->font_size, lc));
+      total = std::max(total, res_pct_h(it.ics->min_h, h_basis, it.ics->font_size, lc));
     if (it.ics->max_h.unit != L_AUTO && it.ics->max_h.unit != L_NORMAL)
       total = std::min(total, res_l(it.ics->max_h, item_w, it.ics->font_size, lc));
     bx->h = total;

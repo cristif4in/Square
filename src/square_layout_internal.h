@@ -41,6 +41,12 @@ struct InlineItem {
 /* ============================ shared helpers (square_layout_common.cpp) ============================ */
 float res_l(const Length& L, float pct_basis, float em, LayoutCtx& lc);
 inline float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
+/* vertical lengths resolve percentages against the parent's definite content
+ * height (0 = parent height auto: percentage behaves like auto/0) */
+inline float res_pct_h(const Length& L, float parent_ch, float em, LayoutCtx& lc) {
+  if (L.unit == L_PCT) return parent_ch > 0.f ? L.val * parent_ch / 100.f : 0.f;
+  return res_l(L, parent_ch, em, lc);
+}
 bool is_blocky(Display d);
 bool is_atomic_inline(Display d);
 bool node_invisible(const ComputedStyle* cs);
