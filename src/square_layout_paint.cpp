@@ -291,6 +291,14 @@ static void paint_bg_layers(ComputedStyle* cs, const Rect& bounds, PaintCtx& ctx
     memcpy(own_rc.radius, rad, 4 * sizeof(float));
   }
   const RoundedClip* rc = has_radius ? &own_rc : (ctx.rc.active ? &ctx.rc : nullptr);
+  /* background painting is clipped to the element's padding box */
+  Rect bclip = ctx.clip;
+  {
+    float cx0 = std::max(bclip.x, pad_box.x), cy0 = std::max(bclip.y, pad_box.y);
+    float cx1 = std::min(bclip.x + bclip.w, pad_box.x + pad_box.w);
+    float cy1 = std::min(bclip.y + bclip.h, pad_box.y + pad_box.h);
+    bclip = {cx0, cy0, std::max(0.f, cx1 - cx0), std::max(0.f, cy1 - cy0)};
+  }
   for (auto& layer : cs->bgs) {
     if (layer.kind == BG_LINEAR || layer.kind == BG_RADIAL) {
       gfx_fill_gradient(s, pad_box, layer.grad, &ctx.clip, rc);
@@ -314,29 +322,34 @@ static void paint_bg_layers(ComputedStyle* cs, const Rect& bounds, PaintCtx& ctx
         /* auto: intrinsic */
         dst = {pad_box.x, pad_box.y, iw, ih};
       }
+      if (getenv("SQRL_DBG_BG"))
+        engine_log(1, "[bg] url=%.60s dst=%.0f,%.0f %.0fx%.0f pad=%.0fx%.0f size_kind=%d rx=%d ry=%d",
+                   layer.url.c_str(), dst.x, dst.y, dst.w, dst.h, pad_box.w, pad_box.h,
+                   (int)layer.size_kind, (int)layer.repeat_x, (int)layer.repeat_y);
       /* position */
       float px = res_l(layer.pos_x, pad_box.w - dst.w, cs->font_size, lc);
       float py = res_l(layer.pos_y, pad_box.h - dst.h, cs->font_size, lc);
       dst.x += px;
       dst.y += py;
-      if (layer.repeat) {
-        /* tile across pad_box */
+      if (layer.repeat && dst.w > 0 && dst.h > 0) {
+        /* tile across pad_box (respecting repeat-x / repeat-y axes) */
         float x0 = pad_box.x - dst.w * ceilf((pad_box.x - dst.x) / dst.w);
         float y0 = pad_box.y - dst.h * ceilf((pad_box.y - dst.y) / dst.h);
-        for (float yy = y0; yy < pad_box.y + pad_box.h + dst.h; yy += dst.h) {
-          for (float xx = x0; xx < pad_box.x + pad_box.w + dst.w; xx += dst.w) {
+        float y_end = layer.repeat_y ? pad_box.y + pad_box.h + dst.h : dst.y + dst.h;
+        float x_end = layer.repeat_x ? pad_box.x + pad_box.w + dst.w : dst.x + dst.w;
+        for (float yy = layer.repeat_y ? y0 : dst.y; yy < y_end; yy += dst.h) {
+          for (float xx = layer.repeat_x ? x0 : dst.x; xx < x_end; xx += dst.w) {
             Rect tile = {xx, yy, dst.w, dst.h};
             if (tile.x + tile.w < pad_box.x || tile.x > pad_box.x + pad_box.w ||
                 tile.y + tile.h < pad_box.y || tile.y > pad_box.y + pad_box.h)
               continue;
-            gfx_draw_image(s, ii.gfx_id, tile, nullptr, 0, &ctx.clip, rc, ctx.alpha);
-            if (!layer.repeat) break;
-            if (dst.w <= 0) break;
+            gfx_draw_image(s, ii.gfx_id, tile, nullptr, 0, &bclip, rc, ctx.alpha);
+            if (!layer.repeat_x) break;
           }
-          if (dst.h <= 0) break;
+          if (!layer.repeat_y) break;
         }
       } else {
-        gfx_draw_image(s, ii.gfx_id, dst, nullptr, fit, &ctx.clip, rc, ctx.alpha);
+        gfx_draw_image(s, ii.gfx_id, dst, nullptr, fit, &bclip, rc, ctx.alpha);
       }
     }
   }
@@ -567,8 +580,9 @@ static void paint_box(Box* b, PaintCtx& ctx) {
 static void dump_box_tree(Box* b, int depth, int max_depth) {
   if (!b || depth > max_depth) return;
   const char* tag = b->node ? b->node->tag.c_str() : "(anon)";
-  fprintf(stderr, "%*s%s y=%.0f x=%.0f w=%.0f h=%.0f kids=%zu\n", depth * 2, "", tag,
-          b->y, b->x, b->w, b->h, b->kids.size());
+  fprintf(stderr, "%*s%s y=%.0f x=%.0f w=%.0f h=%.0f ta=%d disp=%d kids=%zu\n", depth * 2, "", tag,
+          b->y, b->x, b->w, b->h, b->cs ? (int)b->cs->text_align : -1,
+          b->cs ? (int)b->cs->display : -1, b->kids.size());
   for (size_t i = 0; i < b->kids.size() && i < 8; i++) dump_box_tree(b->kids[i], depth + 1, max_depth);
 }
 
@@ -613,7 +627,8 @@ static void draw_scrollbar(Surface& s, const Document* doc, Box* root, float scr
 void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images,
                     float scroll_y, const TextSelection* sel) {
   g_painted_boxes = g_painted_frags = g_painted_images = 0;
-  if (getenv("SQRL_DUMP_TREE") && root) dump_box_tree(root, 0, 4);
+  if (getenv("SQRL_DUMP_TREE") && root)
+    dump_box_tree(root, 0, getenv("SQRL_DUMP_DEPTH") ? atoi(getenv("SQRL_DUMP_DEPTH")) : 4);
   LayoutCtx lc;
   lc.doc = doc;
   lc.images = images;

@@ -265,6 +265,8 @@ struct BgLayer {
   Length pos_x, pos_y;                   /* offsets (px or %) */
   bool pos_pct_x = true, pos_pct_y = true;
   bool repeat = true;
+  bool repeat_x = true;                  /* repeat-x: tile horizontally only */
+  bool repeat_y = true;                  /* repeat-y: tile vertically only */
 };
 
 struct ComputedStyle {

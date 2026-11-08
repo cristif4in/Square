@@ -732,6 +732,7 @@ void parse_background(const std::string& raw, ComputedStyle* cs, const ResolveCt
     if (!cur.empty()) toks.push_back(cur);
   }
   BgLayer layer;
+  bool pos_x_set = false;
   for (size_t k = 0; k < toks.size(); k++) {
     const std::string& t = toks[k];
     std::string lt = lc(t);
@@ -772,8 +773,10 @@ void parse_background(const std::string& raw, ComputedStyle* cs, const ResolveCt
           } else layer.size_h.unit = L_AUTO;
         } else layer.size_h.unit = L_AUTO;
       }
-    } else if (lt == "no-repeat") layer.repeat = false;
-    else if (lt == "repeat" || lt == "repeat-x" || lt == "repeat-y" || lt == "round" || lt == "space") layer.repeat = true;
+    } else if (lt == "no-repeat") { layer.repeat = false; layer.repeat_x = false; layer.repeat_y = false; }
+    else if (lt == "repeat-x") { layer.repeat = true; layer.repeat_x = true; layer.repeat_y = false; }
+    else if (lt == "repeat-y") { layer.repeat = true; layer.repeat_x = false; layer.repeat_y = true; }
+    else if (lt == "repeat" || lt == "round" || lt == "space") { layer.repeat = true; layer.repeat_x = true; layer.repeat_y = true; }
     else if (lt == "fixed" || lt == "scroll" || lt == "local" || lt == "border-box" ||
              lt == "padding-box" || lt == "content-box" || lt == "text") {
       /* bg-attachment/clip: ignore */
@@ -789,7 +792,14 @@ void parse_background(const std::string& raw, ComputedStyle* cs, const ResolveCt
       else {
         Length L;
         parse_length(t, &L, rc);
-        if (L.unit == L_PX || L.unit == L_PCT || L.unit == L_CALC) layer.pos_x = L;
+        if (L.unit == L_PX || L.unit == L_PCT || L.unit == L_CALC) {
+          if (!pos_x_set) {
+            layer.pos_x = L;
+            pos_x_set = true;
+          } else {
+            layer.pos_y = L;
+          }
+        }
       }
     }
   }

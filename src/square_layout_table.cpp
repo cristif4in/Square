@@ -274,6 +274,22 @@ float layout_table_content(Box* b, Node* el, LayoutCtx& lc) {
       if (!cell.node || cell.is_anon) continue;
       ComputedStyle* ics = cell.node->cs;
       float em = ics->font_size;
+      const std::string* wattr = cell.node->attr("width");
+      if (wattr && !wattr->empty()) {
+        std::string wv = *wattr;
+        float per;
+        if (wv.back() == '%') per = (float)atof(wv.c_str()) * avail_w / 100.f;
+        else per = (float)atof(wv.c_str());
+        if (per > 0) {
+          float pcw = per;
+          pcw += ics->border_style[3] ? res_l(ics->border_width[3], avail_w, em, lc) : 0;
+          pcw += ics->border_style[1] ? res_l(ics->border_width[1], avail_w, em, lc) : 0;
+          pcw += res_l(ics->padding[3], avail_w, em, lc) + res_l(ics->padding[1], avail_w, em, lc);
+          float p2 = pcw / (float)cell.cs_span;
+          for (int i = cell.col; i < std::min(ncols, cell.col + cell.cs_span); i++)
+            colw[i] = std::max(colw[i], p2);
+        }
+      }
       if (ics->width.unit != L_AUTO && ics->width.unit != L_NORMAL) {
         float w = res_l(ics->width, avail_w, em, lc);
         w += ics->border_style[3] ? res_l(ics->border_width[3], avail_w, em, lc) : 0;
@@ -385,7 +401,13 @@ float layout_table_content(Box* b, Node* el, LayoutCtx& lc) {
 
   /* placement */
   float y = 0;
+  float table_content_w = 0;
+  for (int i = 0; i < ncols; i++) table_content_w += colw[i];
   for (size_t r = 0; r < rows.size(); r++) {
+    rows[r].box->x = b->x + b->pad_l + b->bor_l;
+    rows[r].box->y = b->y + b->pad_t + b->bor_t + y;
+    rows[r].box->w = table_content_w;
+    rows[r].box->h = rowh[r];
     for (TableCell& cell : rows[r].cells) {
       float x0 = 0;
       for (int i = 0; i < cell.col; i++) x0 += colw[i];

@@ -98,8 +98,19 @@ static std::string cache_path(const std::string& dir, const std::string& url) {
   return path;
 }
 
+static bool looks_like_image(const std::vector<uint8_t>& b) {
+  if (b.size() < 8) return false;
+  static const uint8_t png[8] = {137, 'P', 'N', 'G', 13, 10, 26, 10};
+  if (!memcmp(b.data(), png, 8)) return true;
+  if (b[0] == 0xFF && b[1] == 0xD8) return true;
+  if (b.size() >= 6 && (!memcmp(b.data(), "GIF87a", 6) || !memcmp(b.data(), "GIF89a", 6))) return true;
+  if (b.size() >= 12 && !memcmp(b.data() + 8, "WEBP", 4)) return true;
+  if (b.size() >= 5 && (!memcmp(b.data(), "<svg", 4) || !memcmp(b.data(), "<?xml", 5))) return true;
+  return false;
+}
+
 static bool parse_cache_header(const std::string& head, int64_t* ts_out) {
-  if (head.rfind("SQRL1 ", 0) != 0) return false;
+  if (head.rfind("SQRL1 ", 0) != 0 && head.rfind("SQRL2 ", 0) != 0) return false;
   size_t e = head.find('\n');
   if (e == std::string::npos || e < 7) return false;
   *ts_out = (int64_t)atoll(head.substr(6, e - 6).c_str());
@@ -339,7 +350,7 @@ HttpResult fetch_sync(Instance* inst, const std::string& url, const char* dest) 
   bool is_script = dest_s == "script";
   if (is_img) {
     CacheEntry ce;
-    if (cache_lookup(url, &ce)) {
+    if (cache_lookup(url, &ce) && looks_like_image(ce.body)) {
       int64_t age = (int64_t)time(nullptr) - ce.ts;
       bool fresh = age <= ce.max_age;
       bool revalidatable = !ce.etag.empty() || !ce.last_mod.empty();
@@ -450,7 +461,8 @@ HttpResult fetch_sync(Instance* inst, const std::string& url, const char* dest) 
     std::this_thread::sleep_for(std::chrono::milliseconds(600 * (attempt + 1)));
     engine_log(2, "[retry] %s (attempt %d, status %d)", url.c_str(), attempt + 1, r.status);
   }
-  if (is_img && r.ok && r.status == 200 && !looks_blocked(r)) {
+  if (is_img && r.ok && r.status == 200 && !looks_blocked(r) &&
+      (looks_like_image(r.body) || plat_lc(r.header("Content-Type")).find("image") != std::string::npos)) {
     std::string cc = plat_lc(r.header("Cache-Control"));
     if (cc.find("no-store") == std::string::npos) {
       int ma = 86400;

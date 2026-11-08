@@ -337,7 +337,13 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     return true;
   }
   if (prop == "background-repeat") {
-    if (!cs->bgs.empty()) cs->bgs.back().repeat = lc(trim(v)) != "no-repeat";
+    if (!cs->bgs.empty()) {
+      std::string s2 = lc(trim(v));
+      BgLayer& L = cs->bgs.back();
+      L.repeat = s2 != "no-repeat";
+      L.repeat_x = L.repeat && s2 != "repeat-y";
+      L.repeat_y = L.repeat && s2 != "repeat-x";
+    }
     return true;
   }
   if (prop == "color") {
@@ -852,7 +858,8 @@ struct UaSheet {
       "body{display:block;margin:8px;}"
       "head,meta,title,link,style,script,template,base,noscript{display:none}"
       "div,section,article,header,footer,nav,main,aside,figure,figcaption,form,fieldset,"
-      "address,blockquote,pre,hr,dl,dt,dd,center{display:block}"
+      "address,blockquote,pre,hr,dl,dt,dd{display:block}"
+      "center{display:block;text-align:center}"
       "h1{display:block;font-size:2em;font-weight:700;margin:0.67em 0}"
       "h2{display:block;font-size:1.5em;font-weight:700;margin:0.83em 0}"
       "h3{display:block;font-size:1.17em;font-weight:700;margin:1em 0}"
@@ -883,6 +890,7 @@ struct UaSheet {
       "th{font-weight:700;text-align:center}"
       "legend,label,option,optgroup{display:block}"
       "mark{background-color:#ff0;color:#000}"
+      "input[type=hidden]{display:none}"
       "code,tt,kbd,samp,pre{font-family:monospace}"
       "pre{white-space:pre;margin:1em 0}"
       "blockquote{margin:1em 40px}"

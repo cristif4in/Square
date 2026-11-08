@@ -367,6 +367,9 @@ float layout_element(Box* b, Node* el, LayoutCtx& lc) {
   if (cs->max_h.unit != L_AUTO && cs->max_h.unit != L_NORMAL)
     content_h = std::min(content_h, res_l(cs->max_h, avail_w, em, lc));
 
+  if (content_h <= 0 &&
+      (el->tag == "input" || el->tag == "button" || el->tag == "select" || el->tag == "textarea"))
+    content_h = cs->font_size * 1.4f + 8;
   b->ch = content_h;
   b->h = content_h + b->pad_t + b->pad_b + b->bor_t + b->bor_b;
   /* animated translateX (ticker-style keyframes): shift by pct of own width */
