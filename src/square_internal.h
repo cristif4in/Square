@@ -174,12 +174,42 @@ struct FontFaceRule { std::string family; int weight = 400; bool italic = false;
 struct MediaQuery {
   float minw = -1, maxw = -1, minh = -1, maxh = -1;
   bool negative = false;
+  /* non-numeric features: name:value pairs evaluated against the environment */
+  std::vector<std::pair<std::string, std::string>> features;
+  std::vector<std::string> bool_features; /* bare (feature) names, e.g. (hover) */
   bool eval(int vw, int vh) const {
     bool ok = true;
     if (minw >= 0) ok = ok && vw >= minw;
     if (maxw >= 0) ok = ok && vw <= maxw;
     if (minh >= 0) ok = ok && vh >= minh;
     if (maxh >= 0) ok = ok && vh <= maxh;
+    for (auto& f : features) {
+      const std::string& n = f.first;
+      const std::string& v = f.second;
+      bool m = false;
+      if (n == "prefers-color-scheme") {
+        const char* sch = getenv("SQRL_COLOR_SCHEME");
+        std::string cur = sch ? sch : "light";
+        m = v == cur;
+      } else if (n == "prefers-reduced-motion") {
+        /* engine always animates: only "no-preference" matches */
+        m = v == "no-preference";
+      } else if (n == "hover") {
+        m = v == "hover"; /* pointer-driven desktop UI */
+      } else if (n == "pointer") {
+        m = v == "fine";
+      } else if (n == "orientation") {
+        m = v == "landscape" ? vw >= vh : vw < vh;
+      } else if (n == "resolution" || n == "grid") {
+        m = true;
+      }
+      ok = ok && m;
+    }
+    for (auto& n : bool_features) {
+      /* bare (feature) = true when the capability exists */
+      bool m = n == "hover" || n == "pointer" || n == "grid";
+      ok = ok && m;
+    }
     return negative ? !ok : ok;
   }
 };

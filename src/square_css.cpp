@@ -239,7 +239,10 @@ static bool parse_media_query(const std::string& q, MediaQuery* mq) {
       else if (name == "max-width") mq->maxw = val;
       else if (name == "min-height") mq->minh = val;
       else if (name == "max-height") mq->maxh = val;
-      /* prefers-color-scheme etc: ignore (treated as matching) */
+      else
+        mq->features.push_back({name, lc(trim(feat.substr(colon + 1)))});
+    } else if (!feat.empty()) {
+      mq->bool_features.push_back(feat);
     }
     i = b;
     size_t nxt = s.find(" and ", b);
