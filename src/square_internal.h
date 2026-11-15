@@ -399,6 +399,13 @@ struct ComputedStyle {
   float column_rule_w = 1;
   Color column_rule_color{255, 28, 34, 48}; /* currentColor-ish default */
   bool column_rule_color_set = false;
+  /* CSS multicol */
+  int column_count = 0;                  /* 0 = auto (no columns) */
+  Length column_gap;                     /* length; default 16px */
+  uint8_t column_rule_style = 0;         /* 0 none, else like border styles */
+  float column_rule_w = 1;
+  Color column_rule_color{255, 28, 34, 48}; /* currentColor-ish default */
+  bool column_rule_color_set = false;
   uint8_t css_float = 0;                 /* 0 none, 1 left, 2 right */
   /* transitions (subset: opacity / color / background-color / transform) */
   uint8_t trans_props = 0;               /* bit1 opacity, bit2 color, bit4 bg-color, bit8 transform */
@@ -470,6 +477,11 @@ struct Box {
   Rect abs_clip_rect;                    /* for fixed elements etc. */
   /* grid placement */
   int grid_col = 0, grid_row = 0;
+  /* multicol info for rule painting */
+  struct {
+    int count = 0;
+    float gap = 0, content_h = 0;
+  } col_info;
   /* marker for list items */
   std::string marker_text;
   float marker_w = 0;

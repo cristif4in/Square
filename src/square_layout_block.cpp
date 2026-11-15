@@ -374,9 +374,136 @@ float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
   return content_h;
 }
 
+/* ============================ multicol ============================ */
+/* Balanced multi-column layout: children are measured at the column width,
+ * assigned to columns sequentially (greedy fill of the balanced height),
+ * then positioned. Inline runs are wrapped into anonymous boxes. */
+static float layout_block_columns(Box* b, Node* el, LayoutCtx& lc) {
+  ComputedStyle* cs = b->cs;
+  float avail_w = b->cw;
+  float em = cs->font_size;
+  int ncols = std::max(1, cs->column_count);
+  float gap = cs->column_gap.unit != L_AUTO && cs->column_gap.unit != L_NORMAL
+                  ? res_l(cs->column_gap, avail_w, em, lc)
+                  : 16.f;
+  if (gap <= 0) gap = 0;
+  float colw = (avail_w - gap * (float)(ncols - 1)) / (float)ncols;
+  if (colw < 1) { colw = avail_w; ncols = 1; }
+  float x0 = b->x + b->pad_l + b->bor_l;
+  float y0 = b->y + b->pad_t + b->bor_t;
+
+  /* partition children into items: elements or inline groups */
+  struct ColItem {
+    Node* el = nullptr;             /* element child (or null for inline group) */
+    std::vector<Node*> group;       /* inline group nodes */
+    Box* box = nullptr;
+    float h = 0, mt = 0, mb = 0;
+    int col = 0;
+    float y = 0;
+  };
+  std::vector<ColItem> items;
+  std::vector<Node*> group;
+  auto flush_group = [&]() {
+    bool any = false;
+    for (Node* gn : group) {
+      if (gn->type == N_TEXT) {
+        for (char ch : gn->data)
+          if (!isspace((unsigned char)ch)) { any = true; break; }
+      } else any = true;
+      if (any) break;
+    }
+    if (!any) { group.clear(); return; }
+    ColItem it;
+    it.group = group;
+    items.push_back(it);
+    group.clear();
+  };
+  for (Node* c : el->children) {
+    if (c->type == N_TEXT) {
+      if (!c->data.empty()) group.push_back(c);
+      continue;
+    }
+    if (c->type != N_ELEMENT || !c->cs) continue;
+    if (node_invisible(c->cs)) continue;
+    if (c->cs->position == P_ABSOLUTE || c->cs->position == P_FIXED) continue;
+    if (is_blocky(c->cs->display)) {
+      flush_group();
+      ColItem it;
+      it.el = c;
+      items.push_back(it);
+    } else {
+      group.push_back(c);
+    }
+  }
+  flush_group();
+
+  /* measure + lay out each item at the column width */
+  float total = 0;
+  for (auto& it : items) {
+    Box* cb = new_box(it.el, b);
+    it.box = cb;
+    b->kids.push_back(cb);
+    if (it.el) {
+      ComputedStyle* ics = it.el->cs;
+      resolve_box_edges(cb, ics, colw, lc);
+      cb->w = colw;
+      cb->cw = std::max(0.f, colw - cb->pad_l - cb->pad_r - cb->bor_l - cb->bor_r);
+      cb->x = 0;
+      cb->y = 0;
+      float ch = layout_element(cb, it.el, lc);
+      it.h = ch + cb->pad_t + cb->pad_b + cb->bor_t + cb->bor_b;
+      it.mt = res_l(ics->margin[0], colw, ics->font_size, lc);
+      it.mb = res_l(ics->margin[2], colw, ics->font_size, lc);
+    } else {
+      cb->cs = cs;
+      cb->w = colw;
+      cb->cw = colw;
+      cb->x = 0;
+      cb->y = 0;
+      std::vector<InlineItem> seq;
+      flatten_nodes(it.group, cs, &seq, lc, false);
+      it.h = layout_inline_seq(cb, seq, lc, 0, 0);
+    }
+    total += it.h + it.mt + it.mb;
+  }
+
+  /* balanced column height, greedy sequential fill */
+  float H = total / (float)ncols;
+  int cur_col = 0;
+  float cur_y = 0;
+  float max_fill = 0;
+  for (auto& it : items) {
+    float block = it.h + it.mt + it.mb;
+    if (cur_y > 0 && cur_col < ncols - 1 && cur_y + block > H) {
+      cur_col++;
+      cur_y = 0;
+    }
+    it.col = cur_col;
+    it.y = cur_y;
+    cur_y += block;
+    max_fill = std::max(max_fill, cur_y);
+  }
+
+  /* position boxes into their columns */
+  for (auto& it : items) {
+    float fx = x0 + (float)it.col * (colw + gap) + (it.el ? 0.f : 0.f);
+    float fy = y0 + it.y + it.mt;
+    offset_box_recursive(it.box, fx - it.box->x, fy - it.box->y);
+  }
+
+  b->ch = max_fill;
+  b->h = max_fill + b->pad_t + b->pad_b + b->bor_t + b->bor_b;
+  layout_out_of_flow_children(b, el, lc);
+  b->col_info.count = ncols;
+  b->col_info.gap = gap;
+  b->col_info.content_h = max_fill;
+  return b->h;
+}
+
 /* ============================ element dispatch ============================ */
 float layout_element(Box* b, Node* el, LayoutCtx& lc) {
   ComputedStyle* cs = b->cs;
+  if (cs->column_count > 1) return layout_block_columns(b, el, lc);
   float content_h = 0;
   /* definite height for percentage children: percentages resolve against
    * the parent's definite content height (viewport height for the root) */

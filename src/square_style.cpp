@@ -878,6 +878,46 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     cs->css_float = s == "left" ? 1 : (s == "right" ? 2 : 0);
     return true;
   }
+  if (prop == "columns") {
+    /* shorthand: <column-count> || <column-width>; count only supported */
+    std::vector<std::string> toks;
+    split_values(lc(trim(substitute_vars(v, rc))), &toks);
+    for (auto& t : toks) {
+      if (!t.empty() && (isdigit((unsigned char)t[0]))) cs->column_count = atoi(t.c_str());
+    }
+    return true;
+  }
+  if (prop == "column-count") {
+    std::string s2 = lc(trim(substitute_vars(v, rc)));
+    cs->column_count = s2 == "auto" ? 0 : atoi(s2.c_str());
+    return true;
+  }
+  if (prop == "column-gap") {
+    parse_length(substitute_vars(v, rc), &cs->column_gap, rc);
+    if (cs->column_gap.unit == L_NORMAL || cs->column_gap.unit == L_AUTO)
+      cs->column_gap = Length{};
+    return true;
+  }
+  if (prop == "column-rule" || starts_with(prop, "column-rule-")) {
+    std::string body = lc(trim(substitute_vars(v, rc)));
+    if (body == "none") { cs->column_rule_style = 0; return true; }
+    std::vector<std::string> toks;
+    split_values(body, &toks);
+    for (auto& t : toks) {
+      if (t == "solid" || t == "dashed" || t == "dotted" || t == "double")
+        cs->column_rule_style = t == "solid" ? 1 : (t == "dashed" ? 2 : (t == "dotted" ? 3 : 4));
+      else if (!t.empty() && (isdigit((unsigned char)t[0]) || t[0] == '.'))
+        cs->column_rule_w = (float)atof(t.c_str());
+      else {
+        Color c;
+        if (parse_css_color(trim(substitute_vars(v, rc)), rc, &c)) {
+          cs->column_rule_color = c;
+          cs->column_rule_color_set = true;
+        }
+      }
+    }
+    return true;
+  }
   if (prop == "transition-property" || prop == "transition-duration" ||
       prop == "transition-delay" || prop == "transition-timing-function") {
     std::string body = substitute_vars(v, rc);
@@ -987,7 +1027,7 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     "src", "unicode-range", "text-rendering", "-webkit-font-smoothing", "-moz-osx-font-smoothing",
     "mix-blend-mode", "isolation", "contain", "all", "grid-area", "grid-auto-flow", "grid-auto-rows",
     "grid-auto-columns", "grid-template-areas", "place-content", "place-self",
-    "column-count", "column-gap", "column-rule", "columns", "mask", "mask-image", "clip-path",
+    "mask", "mask-image", "clip-path",
     "text-wrap", "text-indent", "caret-color", "accent-color", "color-scheme",
     "forced-color-adjust", "appearance", "-webkit-appearance", "-webkit-box-orient",
     "-webkit-line-clamp", "-webkit-box-pack", "-webkit-align-items", "-webkit-flex-direction",

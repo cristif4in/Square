@@ -691,6 +691,34 @@ static void paint_box(Box* b, PaintCtx& ctx) {
     }
   }
 
+  /* multicol column rules */
+  if (b->col_info.count > 1 && cs->column_rule_style != 0) {
+    float cw = (b->cw - cs->column_rule_w * 0 - (float)(b->col_info.count - 1) * b->col_info.gap) /
+               (float)b->col_info.count;
+    for (int i = 1; i < b->col_info.count; i++) {
+      float rx = b->x + b->pad_l + b->bor_l + (float)i * (cw + b->col_info.gap) - b->col_info.gap / 2 -
+                 cs->column_rule_w / 2;
+      Rect rule{rx, b->y + b->pad_t + b->bor_t, cs->column_rule_w, b->col_info.content_h};
+      if (cs->column_rule_style == 2) { /* dashed */
+        float dash = std::max(4.f, cs->column_rule_w * 3);
+        for (float dy = 0; dy < rule.h; dy += dash * 2) {
+          Rect dseg{rule.x, rule.y + dy, rule.w, std::min(dash, rule.h - dy)};
+          gfx_fill_rect(ts, dseg, cs->column_rule_color, nullptr, &target.clip,
+                        target.rc.active ? &target.rc : nullptr);
+        }
+      } else if (cs->column_rule_style == 3) { /* dotted */
+        for (float dy = 0; dy < rule.h; dy += cs->column_rule_w * 2 + 2) {
+          Rect dseg{rule.x, rule.y + dy, rule.w, rule.w};
+          gfx_fill_rect(ts, dseg, cs->column_rule_color, nullptr, &target.clip,
+                        target.rc.active ? &target.rc : nullptr);
+        }
+      } else {
+        gfx_fill_rect(ts, rule, cs->column_rule_color, nullptr, &target.clip,
+                      target.rc.active ? &target.rc : nullptr);
+      }
+    }
+  }
+
   /* form control appearance */
   if (b->node && (b->node->tag == "input" || b->node->tag == "textarea" ||
                   b->node->tag == "select")) {
