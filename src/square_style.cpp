@@ -664,20 +664,43 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     else cs->object_fit = FIT_FILL;
     return true;
   }
-  if (prop == "filter") {
+  if (prop == "filter" || prop == "backdrop-filter") {
     std::string s = substitute_vars(v, rc);
     std::string ls = lc(s);
-    if (ls == "none" || trim(ls).empty()) return true;
-    size_t p = ls.find("blur(");
-    if (p != std::string::npos) cs->blur_px = (float)atof(ls.c_str() + p + 5);
-    return true;
-  }
-  if (prop == "backdrop-filter") {
-    std::string s = substitute_vars(v, rc);
-    std::string ls = lc(s);
-    if (ls == "none" || trim(ls).empty()) return true;
-    size_t p = ls.find("blur(");
-    if (p != std::string::npos) cs->backdrop_blur_px = (float)atof(ls.c_str() + p + 5);
+    bool is_backdrop = prop == "backdrop-filter";
+    if (ls == "none" || trim(ls).empty()) {
+      if (is_backdrop) cs->backdrop_filter = FilterSpec{};
+      else cs->filter = FilterSpec{};
+      return true;
+    }
+    FilterSpec fx;
+    size_t i = 0;
+    while (i < ls.size()) {
+      size_t po = ls.find('(', i);
+      if (po == std::string::npos) break;
+      std::string fn = trim(ls.substr(i, po - i));
+      size_t pc = ls.find(')', po);
+      if (pc == std::string::npos) break;
+      std::string arg = trim(ls.substr(po + 1, pc - po - 1));
+      float val = (float)atof(arg.c_str());
+      bool pct = !arg.empty() && arg.back() == '%';
+      bool deg = arg.size() > 3 && arg.compare(arg.size() - 3, 3, "deg") == 0;
+      if (fn == "blur") {
+        if (is_backdrop) cs->backdrop_blur_px = val;
+        else cs->blur_px = val;
+      } else if (fn == "brightness") fx.brightness = pct ? val / 100.f : val;
+      else if (fn == "contrast") fx.contrast = pct ? val / 100.f : val;
+      else if (fn == "saturate") fx.saturate = pct ? val / 100.f : val;
+      else if (fn == "grayscale") fx.grayscale = pct ? val / 100.f : val;
+      else if (fn == "sepia") fx.sepia = pct ? val / 100.f : val;
+      else if (fn == "invert") fx.invert = pct ? val / 100.f : val;
+      else if (fn == "opacity") fx.opacity = pct ? val / 100.f : val;
+      else if (fn == "hue-rotate")
+        fx.hue_rotate = deg ? val : (arg.find("turn") != std::string::npos ? val * 360 : val);
+      i = pc + 1;
+    }
+    if (is_backdrop) cs->backdrop_filter = fx;
+    else cs->filter = fx;
     return true;
   }
   if (prop == "content") {
