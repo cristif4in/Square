@@ -414,6 +414,13 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     cs->letter_spacing = resolve_length(L, cs->font_size, cs->font_size, rc.rem, 0, 0);
     return true;
   }
+  if (prop == "word-spacing") {
+    if (lc(v) == "normal") { cs->word_spacing = 0; return true; }
+    Length L;
+    parse_length(substitute_vars(v, rc), &L, rc);
+    cs->word_spacing = resolve_length(L, cs->font_size, cs->font_size, rc.rem, 0, 0);
+    return true;
+  }
   if (prop == "text-align") {
     std::string s = lc(v);
     if (s == "center") cs->text_align = TA_CENTER;
@@ -443,6 +450,7 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     std::string s = lc(v);
     if (s.find("underline") != std::string::npos) cs->deco |= 1;
     if (s.find("line-through") != std::string::npos) cs->deco |= 2;
+    if (s.find("overline") != std::string::npos) cs->deco |= 4;
     if (s == "none") cs->deco = 0;
     return true;
   }
@@ -958,6 +966,7 @@ static void init_computed(ComputedStyle* cs, const ComputedStyle* parent) {
     cs->font_weight = parent->font_weight;
     cs->italic = parent->italic;
     cs->letter_spacing = parent->letter_spacing;
+    cs->word_spacing = parent->word_spacing;
     cs->text_align = parent->text_align;
     cs->text_transform = parent->text_transform;
     cs->white_space = parent->white_space;

@@ -215,14 +215,14 @@ static float measure_text_width(Node* tn, const ComputedStyle* cs, LayoutCtx& lc
   std::string word;
   auto flush_word = [&]() {
     if (word.empty()) return;
-    total += font_measure_text(f, word.c_str(), cs->letter_spacing);
+    total += font_measure_text(f, word.c_str(), cs->letter_spacing, cs->word_spacing);
     word.clear();
   };
   bool any_word = false;
   for (char c : txt) {
     if (isspace((unsigned char)c)) {
       flush_word();
-      if (any_word) total += font_measure_text(f, " ", cs->letter_spacing);
+      if (any_word) total += font_measure_text(f, " ", cs->letter_spacing, cs->word_spacing);
     } else {
       word += c;
       any_word = true;
@@ -306,14 +306,14 @@ static float measure_text_min_width(Node* t, ComputedStyle* cs, LayoutCtx& lc) {
   /* white-space:nowrap — the smallest the text can get is the whole line */
   if (cs->white_space == WS_NOWRAP) {
     void* f = font_for(cs);
-    return f ? font_measure_text(f, s.c_str(), cs->letter_spacing) : 0;
+    return f ? font_measure_text(f, s.c_str(), cs->letter_spacing, cs->word_spacing) : 0;
   }
   float worst = 0;
   std::string word;
   auto flush_word = [&]() {
     if (word.empty()) return;
     void* f = font_for(cs);
-    if (f) worst = std::max(worst, font_measure_text(f, word.c_str(), cs->letter_spacing));
+    if (f) worst = std::max(worst, font_measure_text(f, word.c_str(), cs->letter_spacing, cs->word_spacing));
     word.clear();
   };
   for (char ch : s) {

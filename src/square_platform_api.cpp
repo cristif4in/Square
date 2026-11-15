@@ -579,7 +579,7 @@ static bool hit_text_pos(Box* b, float px, float py, Node** tn, int* off) {
     if (px >= f.rect.x && px <= f.rect.x + f.rect.w && py >= f.rect.y - 2 &&
         py <= f.rect.y + f.rect.h + 2) {
       std::vector<GlyphPos> g;
-      if (f.run.font) font_shape(f.run.font, f.run.text.c_str(), f.run.spacing, &g);
+      if (f.run.font) font_shape(f.run.font, f.run.text.c_str(), f.run.spacing, &g, f.run.wspace);
       int k = 0;
       while (k < (int)g.size() && f.run.x + g[k].x < px) k++;
       *tn = f.node;

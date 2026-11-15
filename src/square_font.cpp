@@ -199,7 +199,7 @@ static inline int utf8_next(const char* s, size_t len, size_t* i, int* cp) {
   return 1;
 }
 
-float font_measure_text(void* font, const char* utf8, float letter_spacing) {
+float font_measure_text(void* font, const char* utf8, float letter_spacing, float word_spacing) {
   if (!font || !utf8) return 0;
   FontEntry* fe = (FontEntry*)font;
   size_t i = 0, len = strlen(utf8);
@@ -216,13 +216,15 @@ float font_measure_text(void* font, const char* utf8, float letter_spacing) {
     int aw, lsb;
     stbtt_GetGlyphHMetrics(&fe->info, gi, &aw, &lsb);
     x += aw * fe->scale + letter_spacing;
+    if (cp == ' ' && !first) x += word_spacing;
     prev = cp;
     first = false;
   }
   return x;
 }
 
-float font_shape(void* font, const char* utf8, float letter_spacing, std::vector<GlyphPos>* out) {
+float font_shape(void* font, const char* utf8, float letter_spacing, std::vector<GlyphPos>* out,
+                 float word_spacing) {
   if (!font) return 0;
   FontEntry* fe = (FontEntry*)font;
   size_t i = 0, len = utf8 ? strlen(utf8) : 0;
@@ -238,6 +240,7 @@ float font_shape(void* font, const char* utf8, float letter_spacing, std::vector
     int aw, lsb;
     stbtt_GetGlyphHMetrics(&fe->info, gi, &aw, &lsb);
     x += aw * fe->scale + letter_spacing;
+    if (cp == ' ' && !first) x += word_spacing;
     prev = cp;
     first = false;
   }

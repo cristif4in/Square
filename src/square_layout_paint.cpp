@@ -36,10 +36,10 @@ static void paint_selected_text(Surface& s, const InlineFrag& f, PaintCtx& ctx) 
   auto prefix_x = [&](int k) {
     if (k <= 0) return 0.f;
     std::vector<GlyphPos> g;
-    if (f.run.font) font_shape(f.run.font, f.run.text.c_str(), f.run.spacing, &g);
+    if (f.run.font) font_shape(f.run.font, f.run.text.c_str(), f.run.spacing, &g, f.run.wspace);
     if (g.empty()) return 0.f;
     if ((size_t)k >= g.size())
-      return font_measure_text(f.run.font, f.run.text.c_str(), f.run.spacing);
+      return font_measure_text(f.run.font, f.run.text.c_str(), f.run.spacing, f.run.wspace);
     return g[k].x;
   };
   float xa = f.run.x + prefix_x((int)c0);
@@ -56,7 +56,7 @@ static void paint_selected_text(Surface& s, const InlineFrag& f, PaintCtx& ctx) 
   gfx_fill_rect(s, hl, sbg, nullptr, &ctx.clip, ctx.rc.active ? &ctx.rc : nullptr);
   if (have_scol) {
     std::vector<GlyphPos> glyphs;
-    font_shape(f.run.font, f.run.text.c_str(), f.run.spacing, &glyphs);
+    font_shape(f.run.font, f.run.text.c_str(), f.run.spacing, &glyphs, f.run.wspace);
     gfx_draw_glyphs(s, f.run.font, f.run.x, f.run.y, glyphs, scol, ctx.alpha * f.run.alpha,
                     &ctx.clip);
   }
@@ -159,7 +159,7 @@ static void paint_frags(Box* container, PaintCtx& ctx) {
       std::vector<GlyphPos> glyphs;
       if (f.run.font) {
         paint_selected_text(s, f, ctx);
-        font_shape(f.run.font, f.run.text.c_str(), f.run.spacing, &glyphs);
+        font_shape(f.run.font, f.run.text.c_str(), f.run.spacing, &glyphs, f.run.wspace);
         Color run_col = f.run.color;
         {
           size_t c0 = 0, c1 = 0;
@@ -193,11 +193,15 @@ static void paint_frags(Box* container, PaintCtx& ctx) {
                         ctx.alpha * f.run.alpha, &ctx.clip);
         /* decorations */
         if (f.run.deco & 1) {
-          Rect u = {f.run.x, f.run.y + f.run.size * 0.12f, font_measure_text(f.run.font, f.run.text.c_str(), f.run.spacing), std::max(1.f, f.run.size / 16.f)};
+          Rect u = {f.run.x, f.run.y + f.run.size * 0.12f, font_measure_text(f.run.font, f.run.text.c_str(), f.run.spacing, f.run.wspace), std::max(1.f, f.run.size / 16.f)};
           gfx_fill_rect(s, u, f.run.color, nullptr, &ctx.clip, ctx.rc.active ? &ctx.rc : nullptr);
         }
         if (f.run.deco & 2) {
-          Rect u = {f.run.x, f.run.y - f.run.size * 0.28f, font_measure_text(f.run.font, f.run.text.c_str(), f.run.spacing), std::max(1.f, f.run.size / 16.f)};
+          Rect u = {f.run.x, f.run.y - f.run.size * 0.28f, font_measure_text(f.run.font, f.run.text.c_str(), f.run.spacing, f.run.wspace), std::max(1.f, f.run.size / 16.f)};
+          gfx_fill_rect(s, u, f.run.color, nullptr, &ctx.clip, ctx.rc.active ? &ctx.rc : nullptr);
+        }
+        if (f.run.deco & 4) {
+          Rect u = {f.run.x, f.run.y - f.run.size * 0.92f, font_measure_text(f.run.font, f.run.text.c_str(), f.run.spacing, f.run.wspace), std::max(1.f, f.run.size / 16.f)};
           gfx_fill_rect(s, u, f.run.color, nullptr, &ctx.clip, ctx.rc.active ? &ctx.rc : nullptr);
         }
       }

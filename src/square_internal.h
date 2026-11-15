@@ -297,6 +297,7 @@ struct ComputedStyle {
   float line_height_mul = 1.2f;          /* unitless multiple */
   Length line_height;                    /* px / pct of font size */
   float letter_spacing = 0;
+  float word_spacing = 0;
   TextAlign text_align = TA_START;
   TextTransform text_transform = TT_NONE;
   WhiteSpace white_space = WS_NORMAL;
@@ -366,7 +367,7 @@ struct GlyphPos { uint32_t gi; float x; };
 struct TextRun {
   std::string text;                      /* already transformed (upper/lower) */
   void* font = nullptr;                  /* gfx FontHandle */
-  float size = 16, spacing = 0;
+  float size = 16, spacing = 0, wspace = 0;
   Color color{255, 0, 0, 0};
   float x = 0, y = 0;                    /* x = left, y = BASELINE (page coords) */
   float width = 0;
@@ -506,8 +507,9 @@ struct Surface {
 
 /* font request → cached handle. families in preference order ("Inter", "sans-serif"...) */
 void* font_resolve(const std::vector<std::string>& families, int weight, bool italic, float size_px);
-float font_measure_text(void* font, const char* utf8, float letter_spacing);
-float font_shape(void* font, const char* utf8, float letter_spacing, std::vector<GlyphPos>* out);
+float font_measure_text(void* font, const char* utf8, float letter_spacing, float word_spacing = 0);
+float font_shape(void* font, const char* utf8, float letter_spacing, std::vector<GlyphPos>* out,
+               float word_spacing = 0);
 float font_ascent(void* font);
 float font_descent(void* font);         /* positive value */
 

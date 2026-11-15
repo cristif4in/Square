@@ -16,9 +16,10 @@ static void measure_text_item(InlineItem* it, const ComputedStyle* cs, LayoutCtx
   it->run.font = f;
   it->run.size = cs->font_size;
   it->run.spacing = cs->letter_spacing;
+  it->run.wspace = cs->word_spacing;
   it->run.color = cs->color;
   it->run.text = it->text;
-  it->adv = f ? font_measure_text(f, it->text.c_str(), cs->letter_spacing) : 0;
+  it->adv = f ? font_measure_text(f, it->text.c_str(), cs->letter_spacing, cs->word_spacing) : 0;
   float asc, desc;
   float lh = line_height_px(cs, f, lc, &asc, &desc);
   float half = (lh - (asc + desc)) / 2;
