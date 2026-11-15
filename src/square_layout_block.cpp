@@ -207,10 +207,13 @@ float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
       floats.push_back({side, fx, fy, declared_w, total_h});
       continue;
     }
-    if (is_blocky(ccs->display) || atomic_non_media) {
+    bool leaf_control = c->tag == "input" || c->tag == "textarea" || c->tag == "select";
+    if ((is_blocky(ccs->display) || atomic_non_media) && !leaf_control) {
       /* inline-flex/-block/-grid containers in block flow are laid out as
        * block boxes: the inline replaced-item path corrupts the heap when
-       * they have element children (e.g. a ticker track with spans) */
+       * they have element children (e.g. a ticker track with spans).
+       * Leaf form controls (input/textarea/select) stay inline: they have no
+       * element children and must flow with text. */
       flush_inline_group();
       /* margins */
       float em = ccs->font_size;
@@ -454,8 +457,21 @@ float layout_element(Box* b, Node* el, LayoutCtx& lc) {
     content_h = std::min(content_h, res_l(cs->max_h, avail_w, em, lc));
 
   if (content_h <= 0 &&
-      (el->tag == "input" || el->tag == "button" || el->tag == "select" || el->tag == "textarea"))
-    content_h = cs->font_size * 1.4f + 8;
+      (el->tag == "input" || el->tag == "button" || el->tag == "select" || el->tag == "textarea")) {
+    if (el->tag == "textarea") {
+      int rows = el->attr("rows") ? atoi(el->attr("rows")->c_str()) : 2;
+      content_h = (float)rows * cs->font_size * 1.4f + 6;
+    } else if (el->tag == "input") {
+      const std::string* ta = el->attr("type");
+      std::string t = ta ? *ta : "text";
+      if (t == "checkbox" || t == "radio")
+        content_h = std::max(12.f, cs->font_size * 0.85f);
+      else
+        content_h = cs->font_size * 1.4f + 8;
+    } else {
+      content_h = cs->font_size * 1.4f + 8;
+    }
+  }
   b->ch = content_h;
   b->h = content_h + b->pad_t + b->pad_b + b->bor_t + b->bor_b;
   /* animated translateX (ticker-style keyframes): shift by pct of own width */

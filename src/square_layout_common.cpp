@@ -196,6 +196,32 @@ void replaced_intrinsic(Node* el, LayoutCtx& lc, float* w, float* h) {
       }
     }
   }
+  /* form controls: sensible intrinsic defaults (checkbox/radio are square) */
+  if (el->tag == "input") {
+    const std::string* ta = el->attr("type");
+    std::string t = ta ? *ta : "text";
+    float fsem = el->cs ? el->cs->font_size : 16.f;
+    if (t == "checkbox" || t == "radio") {
+      if (aw <= 0) aw = std::max(12.f, fsem * 0.85f);
+      if (ah <= 0) ah = aw;
+    } else if (t == "submit" || t == "button" || t == "reset") {
+      const std::string* val = el->attr("value");
+      if (aw <= 0) aw = (val && !val->empty() ? (float)val->size() * 8.5f : 60.f) + 24;
+      if (ah <= 0) ah = fsem * 1.4f + 10;
+    } else if (aw <= 0) {
+      aw = el->attr("size") ? (float)atoi(el->attr("size")->c_str()) * 8.f + 4 : 150.f;
+    }
+    if (ah <= 0) ah = fsem * 1.4f + 8;
+  } else if (el->tag == "textarea") {
+    float fsem = el->cs ? el->cs->font_size : 16.f;
+    if (aw <= 0) aw = el->attr("cols") ? (float)atoi(el->attr("cols")->c_str()) * 8.5f : 173.f;
+    if (ah <= 0)
+      ah = (float)(el->attr("rows") ? atoi(el->attr("rows")->c_str()) : 2) * fsem * 1.4f + 6;
+  } else if (el->tag == "select") {
+    float fsem = el->cs ? el->cs->font_size : 16.f;
+    if (aw <= 0) aw = 120.f;
+    if (ah <= 0) ah = fsem * 1.4f + 8;
+  }
   if (aw <= 0) aw = 300;
   if (ah <= 0) ah = 150;
   *w = aw;
@@ -236,10 +262,27 @@ float measure_max_content_width(Node* el, LayoutCtx& lc) {
   ComputedStyle* cs = el->cs;
   if (node_invisible(cs)) return 0;
   /* form controls have no element children: generic measurement would give 0 */
+  if (el->tag == "input") {
+    const std::string* ta = el->attr("type");
+    std::string t = ta ? *ta : "text";
+    if (t == "checkbox" || t == "radio") {
+      float sz = std::max(12.f, cs->font_size * 0.85f);
+      return sz + res_l(cs->padding[3], sz, cs->font_size, lc) +
+             res_l(cs->padding[1], sz, cs->font_size, lc);
+    }
+  }
+  if (el->tag == "textarea") {
+    float w = cs->width.unit != L_AUTO && cs->width.unit != L_NORMAL
+                  ? res_l(cs->width, 0, cs->font_size, lc)
+                  : (el->attr("cols") ? (float)atoi(el->attr("cols")->c_str()) * 8.5f : 173.f);
+    return w + res_l(cs->padding[3], w, cs->font_size, lc) +
+           res_l(cs->padding[1], w, cs->font_size, lc);
+  }
   if (el->tag == "input" || el->tag == "select") {
     float w = cs->width.unit != L_AUTO && cs->width.unit != L_NORMAL
                   ? res_l(cs->width, 0, cs->font_size, lc)
-                  : (el->attr("size") ? (float)atoi(el->attr("size")->c_str()) * 8.f : 150.f);
+                  : (el->tag == "select" ? 120.f
+                     : (el->attr("size") ? (float)atoi(el->attr("size")->c_str()) * 8.f : 150.f));
     return w + res_l(cs->padding[3], w, cs->font_size, lc) + res_l(cs->padding[1], w, cs->font_size, lc);
   }
   if (el->tag == "img" || el->tag == "svg") {

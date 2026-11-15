@@ -139,6 +139,16 @@ struct Node {
     }
     return false;
   }
+  /* concatenated text of descendant text nodes (select options, etc.) */
+  std::string text_content() const {
+    std::string out;
+    std::function<void(const Node*)> walk = [&](const Node* m) {
+      if (m->type == N_TEXT) out += m->data;
+      for (const Node* k : m->children) walk(k);
+    };
+    walk(this);
+    return out;
+  }
   int child_index() const {
     if (!parent) return 0;
     for (size_t i = 0; i < parent->children.size(); i++) if (parent->children[i] == this) return (int)i;

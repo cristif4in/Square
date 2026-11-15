@@ -63,6 +63,7 @@ static void paint_selected_text(Surface& s, const InlineFrag& f, PaintCtx& ctx) 
 }
 
 static void paint_box(Box* b, PaintCtx& ctx);
+static void paint_form_control(Surface& ts, PaintCtx& ctx, Node* n, ComputedStyle* cs, Rect cb);
 static void paint_frags(Box* container, PaintCtx& ctx);
 static void paint_bg_layers(ComputedStyle* cs, const Rect& bounds, PaintCtx& ctx,
                             const Rect& pad_box, const float rad[4]);
@@ -238,6 +239,11 @@ static void paint_frags(Box* container, PaintCtx& ctx) {
     if (f.kind == InlineFrag::F_REPLACED_IMG) {
       Node* n = f.node;
       ComputedStyle* ics = n->cs;
+      /* leaf form controls paint their own appearance */
+      if (n && (n->tag == "input" || n->tag == "textarea" || n->tag == "select")) {
+        paint_form_control(s, ctx, n, ics, r);
+        continue;
+      }
       const std::string* src = n->attr("src");
       ImageInfo ii = src && ctx.lc->images ? ctx.lc->images->find(*src) : ImageInfo{};
       engine_log(1, "[paint-img] src=%.50s decoded=%d id=%d rect=%.0f,%.0f %.0fx%.0f",
@@ -375,6 +381,142 @@ static void paint_bg_layers(ComputedStyle* cs, const Rect& bounds, PaintCtx& ctx
         }
       } else {
         gfx_draw_image(s, ii.gfx_id, dst, nullptr, fit, &bclip, rc, ctx.alpha);
+      }
+    }
+  }
+}
+
+/* form control appearance painter (shared by block and inline-replaced paths) */
+static void paint_form_control(Surface& ts, PaintCtx& ctx, Node* n, ComputedStyle* cs, Rect cb) {
+  if (n && (n->tag == "input" || n->tag == "textarea" || n->tag == "select")) {
+    PaintCtx& target = ctx;
+    const std::string* ta = n->attr("type");
+    std::string type = ta ? *ta : (n->tag == "input" ? "text" : "");
+    for (auto& c : type) c = (char)tolower((unsigned char)c);
+    const Rect* clip = &target.clip;
+    const RoundedClip* rcp = target.rc.active ? &target.rc : nullptr;
+    Color accent{255, 26, 115, 219};    /* a,r,g,b — #1a73db-ish */
+    Color border{255, 118, 118, 118};   /* #767676 */
+    Color ink = cs->color;
+    Color muted{255, 130, 130, 130};
+    float fs = cs->font_size;
+    void* fnt = font_for(cs);
+    auto draw_text = [&](const std::string& t, Color col) {
+      if (!fnt || t.empty() || cb.w < 4) return;
+      std::vector<GlyphPos> glyphs;
+      font_shape(fnt, t.c_str(), cs->letter_spacing, &glyphs, cs->word_spacing);
+      float asc = font_ascent(fnt);
+      float ty = cb.y + (cb.h - (asc + font_descent(fnt))) / 2.f + asc;
+      float maxw = cb.w - 6;
+      /* clip glyphs beyond the box */
+      for (size_t gi = 0; gi < glyphs.size(); gi++) {
+        if (glyphs[gi].x > maxw) { glyphs.resize(gi); break; }
+      }
+      gfx_draw_glyphs(ts, fnt, cb.x + 3, ty, glyphs, col, target.alpha, clip);
+    };
+    if (n->tag == "input" && (type == "checkbox" || type == "radio")) {
+      float sz = std::min(std::min(cb.w, cb.h), std::max(12.f, fs * 0.85f));
+      Rect m{cb.x, cb.y + (cb.h - sz) / 2, sz, sz};
+      bool checked = n->attr("checked") != nullptr;
+      if (type == "checkbox") {
+        float r3[4] = {3, 3, 3, 3};
+        if (checked) {
+          gfx_fill_rect(ts, m, accent, r3, clip, rcp);
+          /* white check: two angled strokes approximated with small squares */
+          float stroke = std::max(1.5f, sz / 7.f);
+          auto seg = [&](float x0, float y0, float x1, float y1) {
+            int steps = (int)std::max(2.f, (fabsf(x1 - x0) + fabsf(y1 - y0)) * 2);
+            for (int q = 0; q <= steps; q++) {
+              float t2 = (float)q / steps;
+              Rect px{x0 + (x1 - x0) * t2 - stroke / 2, y0 + (y1 - y0) * t2 - stroke / 2,
+                      stroke, stroke};
+              gfx_fill_rect(ts, px, Color{255, 255, 255, 255}, nullptr, clip, rcp);
+            }
+          };
+          seg(m.x + sz * 0.20f, m.y + sz * 0.52f, m.x + sz * 0.42f, m.y + sz * 0.74f);
+          seg(m.x + sz * 0.42f, m.y + sz * 0.74f, m.x + sz * 0.80f, m.y + sz * 0.28f);
+        } else {
+          gfx_fill_rect(ts, m, Color{255, 255, 255, 255}, r3, clip, rcp);
+          float bwd[4] = {1, 1, 1, 1};
+          gfx_ring_rect(ts, m, r3, bwd, border, clip, rcp);
+        }
+      } else {
+        /* radio */
+        float rr[4] = {sz / 2, sz / 2, sz / 2, sz / 2};
+        gfx_fill_rect(ts, m, Color{255, 255, 255, 255}, rr, clip, rcp);
+        float bwd[4] = {1, 1, 1, 1};
+        gfx_ring_rect(ts, m, rr, bwd, checked ? accent : border, clip, rcp);
+        if (checked) {
+          float dsz = sz * 0.45f;
+          Rect d{m.x + (sz - dsz) / 2, m.y + (sz - dsz) / 2, dsz, dsz};
+          float dr[4] = {dsz / 2, dsz / 2, dsz / 2, dsz / 2};
+          gfx_fill_rect(ts, d, accent, dr, clip, rcp);
+        }
+      }
+    } else if (n->tag == "input" &&
+               (type == "submit" || type == "button" || type == "reset")) {
+      /* button: label text centered */
+      const std::string* val = n->attr("value");
+      std::string label = val && !val->empty() ? *val : "Submit";
+      void* fnt2 = font_for(cs);
+      if (fnt2) {
+        float tw = font_measure_text(fnt2, label.c_str(), 0, 0);
+        std::vector<GlyphPos> glyphs;
+        font_shape(fnt2, label.c_str(), 0, &glyphs);
+        float asc = font_ascent(fnt2);
+        float ty = cb.y + (cb.h - (asc + font_descent(fnt2))) / 2.f + asc;
+        float tx = cb.x + std::max(0.f, (cb.w - tw) / 2);
+        gfx_draw_glyphs(ts, fnt2, tx, ty, glyphs, ink, target.alpha, clip);
+      }
+    } else {
+      /* text-like input, textarea, select */
+      if (n->tag == "select") {
+        /* selected option text */
+        std::string value;
+        bool have = false;
+        for (Node* o : n->children) {
+          if (o->type == N_ELEMENT && o->tag == "option") {
+            if (o->attr("selected")) { value = o->text_content(); have = true; break; }
+          }
+        }
+        if (!have) {
+          for (Node* o : n->children)
+            if (o->type == N_ELEMENT && o->tag == "option") { value = o->text_content(); break; }
+        }
+        draw_text(value, ink);
+        /* chevron: filled triangle from shrinking bars */
+        float chw = std::max(6.f, fs * 0.4f);
+        float chh = std::max(4.f, fs * 0.3f);
+        float cx0 = cb.x + cb.w - 4 - chw;
+        float cy0 = cb.y + (cb.h - chh) / 2;
+        for (int q = 0; q < 4; q++) {
+          float wq = chw * (1.f - (float)q / 4.f);
+          Rect bar{cx0 + (chw - wq) / 2, cy0 + chh * (float)q / 4.f, wq, chh / 4.f + 0.5f};
+          gfx_fill_rect(ts, bar, muted, nullptr, clip, rcp);
+        }
+      } else {
+        const std::string* val = n->attr("value");
+        const std::string* ph = n->attr("placeholder");
+        if (type == "password" && val && !val->empty()) {
+          std::string dots;
+          size_t nchars = 0;
+          size_t q = 0;
+          while (q < val->size()) {
+            size_t adv = 1;
+            unsigned char c0 = (unsigned char)(*val)[q];
+            if (c0 >= 0xF0) adv = 4;
+            else if (c0 >= 0xE0) adv = 3;
+            else if (c0 >= 0xC0) adv = 2;
+            q += adv;
+            nchars++;
+          }
+          dots.assign(nchars, '\x5f');
+          draw_text(dots, ink);
+        } else if (val && !val->empty()) {
+          draw_text(*val, ink);
+        } else if (ph && !ph->empty()) {
+          draw_text(*ph, muted);
+        }
       }
     }
   }
@@ -547,6 +689,15 @@ static void paint_box(Box* b, PaintCtx& ctx) {
       float mrad[4] = {rad, rad, rad, rad};
       gfx_fill_rect(ts, m, bc, mrad, &target.clip, target.rc.active ? &target.rc : nullptr);
     }
+  }
+
+  /* form control appearance */
+  if (b->node && (b->node->tag == "input" || b->node->tag == "textarea" ||
+                  b->node->tag == "select")) {
+    Rect cb = {b->x + b->pad_l + b->bor_l, b->y + b->pad_t + b->bor_t,
+               std::max(0.f, b->w - b->pad_l - b->pad_r - b->bor_l - b->bor_r),
+               std::max(0.f, b->h - b->pad_t - b->pad_b - b->bor_t - b->bor_b)};
+    paint_form_control(ts, target, b->node, cs, cb);
   }
 
   /* children clip */
