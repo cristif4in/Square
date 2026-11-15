@@ -604,6 +604,46 @@ bool parse_gradient(const std::string& raw, BgLayer* layer, const ResolveCtx& rc
       if (!a0.empty() && (isdigit((unsigned char)a0[0]) || a0[0] == '-' || a0.find("to ") == 0)) stop_start = 1;
       else stop_start = 0;
     }
+  } else if (head == "conic-gradient" || head == "repeating-conic-gradient") {
+    layer->kind = BG_LINEAR;
+    layer->grad.kind = 4;
+    layer->grad.angle = 0;
+    if (!args.empty()) {
+      std::string a0 = lc(args[0]);
+      bool has_from = a0.rfind("from ", 0) == 0;
+      bool has_at = a0.find(" at ") != std::string::npos || a0.rfind("at ", 0) == 0;
+      if (has_from || has_at) {
+        stop_start = 1;
+        if (has_from) {
+          /* from <angle>: deg / turn / rad */
+          std::string av = trim(a0.substr(5));
+          size_t at2 = av.find(" at ");
+          if (at2 != std::string::npos) av = trim(av.substr(0, at2));
+          float v = (float)atof(av.c_str());
+          if (av.find("turn") != std::string::npos) layer->grad.angle = v * 360;
+          else if (av.find("deg") != std::string::npos) layer->grad.angle = v;
+          else if (av.find("rad") != std::string::npos) layer->grad.angle = v * 180.f / 3.14159265f;
+          else layer->grad.angle = v;
+        }
+        if (has_at) {
+          size_t at = a0.find(" at ");
+          std::string pos = at == std::string::npos ? a0.substr(3) : a0.substr(at + 4);
+          size_t sp = pos.find(' ');
+          auto pct = [&](std::string t, bool x) -> float {
+            if (!t.empty() && t.back() == '%') return (float)atof(t.c_str()) / 100.f;
+            if (t == "left") return 0;
+            if (t == "right") return 1;
+            if (t == "top") return x ? 0.5f : 0;
+            if (t == "bottom") return x ? 0.5f : 1;
+            return 0.5f;
+          };
+          if (sp != std::string::npos) {
+            layer->grad.cx = pct(pos.substr(0, sp), true);
+            layer->grad.cy = pct(pos.substr(sp + 1), false);
+          }
+        }
+      }
+    }
   } else {
     return false;
   }
@@ -640,7 +680,13 @@ bool parse_gradient(const std::string& raw, BgLayer* layer, const ResolveCtx& rc
     if (ci < toks.size()) {
       std::string p = toks[ci];
       if (!p.empty() && p.back() == '%') st.pos = (float)atof(p.c_str()) / 100.f;
-      else st.pos = (float)atof(p.c_str());
+      else if (layer->grad.kind == 4) {
+        float v = (float)atof(p.c_str());
+        if (p.find("deg") != std::string::npos) st.pos = v / 360.f;
+        else if (p.find("grad") != std::string::npos && p.find("deg") == std::string::npos) st.pos = v / 400.f;
+        else if (p.find("rad") != std::string::npos) st.pos = v * 0.15915494f;
+        else st.pos = v; /* raw number / turn */
+      } else st.pos = (float)atof(p.c_str());
     }
     layer->grad.stops.push_back(st);
   }

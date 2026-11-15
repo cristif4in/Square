@@ -244,6 +244,12 @@ void gfx_fill_gradient(Surface& s, const Rect& r, const GradSpec& g,
       float t;
       if (g.kind == 2) {
         t = (px * ux + py * uy - pmin) * span_inv;
+      } else if (g.kind == 4) {
+        /* conic: angle from center, 0deg = up, clockwise; t in [0,1) */
+        float ccx = r.x + g.cx * r.w, ccy = r.y + g.cy * r.h;
+        float ang = atan2f(px - ccx, -(py - ccy)) * (180.f / 3.14159265f) - g.angle;
+        t = ang / 360.f;
+        t -= floorf(t);
       } else {
         float ccx = r.x + g.cx * r.w, ccy = r.y + g.cy * r.h;
         t = sqrtf((px - ccx) * (px - ccx) + (py - ccy) * (py - ccy)) / std::max(prad, 1e-3f);

@@ -74,7 +74,7 @@ static inline Length length_zero() { Length L; L.unit = L_PX; L.val = 0; return 
 /* resolved gradients -------------------------------------------------- */
 struct GradStop { float pos = -1; Color c; };
 struct GradSpec {
-  int kind = 2;                  /* 2=linear, 3=radial */
+  int kind = 2;                  /* 2=linear, 3=radial, 4=conic */
   float angle = 180;             /* linear, css degrees (0 = to top) */
   float cx = 0.5f, cy = 0.5f;    /* radial center (fractions of box) */
   float radius = -1;             /* radial, px; -1 = farthest corner */
