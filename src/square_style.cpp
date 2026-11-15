@@ -1201,6 +1201,9 @@ struct TransVal {
   bool m_valid = false;
   double t0 = 0;
   float dur = 0;
+  float delay = 0;
+  float prop_dur = 0, prop_delay = 0;
+  std::string prop_timing;
   std::string timing;
 };
 static std::unordered_map<Node*, std::map<std::string, TransVal>> g_transitions;
@@ -1218,11 +1221,38 @@ static Color transition_lerp_color(const Color& a, const Color& b, float t) {
 }
 
 static void apply_transitions(Node* el, ComputedStyle* cs) {
-  if (!el || !cs || cs->trans_props == 0 || cs->trans_dur <= 0) return;
+  bool any_list = !cs->trans_list.empty();
+  if (cs->trans_props == 0 && !any_list) return;
   double now = anim_time_s();
   std::map<std::string, TransVal>& st = g_transitions[el];
-  auto progress = [](const TransVal& tv, double now) {
-    return tv.dur > 0 ? anim_ease(tv.timing, (float)((now - tv.t0) / tv.dur)) : 1.f;
+  auto def_for = [&](const char* prop) -> const ComputedStyle::TransDef* {
+    for (auto& d : cs->trans_list)
+      if (d.prop == prop) return &d;
+    for (auto& d : cs->trans_list)
+      if (d.prop == "all") return &d;
+    return nullptr;
+  };
+  auto prop_enabled = [&](const char* prop, uint8_t bit) -> bool {
+    if (def_for(prop)) return true;
+    return (cs->trans_props & bit) != 0;
+  };
+  auto timing_for = [&](const char* prop) -> std::string {
+    const ComputedStyle::TransDef* d = def_for(prop);
+    return d ? d->timing : std::string();
+  };
+  auto dur_for = [&](const char* prop) -> float {
+    const ComputedStyle::TransDef* d = def_for(prop);
+    return d && d->dur > 0 ? d->dur : cs->trans_dur;
+  };
+  auto delay_for = [&](const char* prop) -> float {
+    const ComputedStyle::TransDef* d = def_for(prop);
+    return d ? d->delay : cs->trans_delay;
+  };
+  auto progress = [&](const TransVal& tv, double now) {
+    if (tv.dur <= 0) return 1.f;
+    float e = (float)((now - tv.t0 - tv.delay) / tv.dur);
+    if (e <= 0) return 0.f;
+    return anim_ease(tv.timing, std::min(1.f, e));
   };
   auto retarget = [&](TransVal& tv, double now) {
     float p = progress(tv, now);
@@ -1233,16 +1263,21 @@ static void apply_transitions(Node* el, ComputedStyle* cs) {
       tv.from += (tv.to - tv.from) * p;
     }
     tv.t0 = now;
-    tv.dur = cs->trans_dur;
-    tv.timing = cs->trans_timing;
+    tv.dur = tv.prop_dur > 0 ? tv.prop_dur : cs->trans_dur;
+    tv.delay = tv.prop_delay;
+    tv.timing = tv.prop_timing.empty() ? cs->trans_timing : tv.prop_timing;
   };
-  if (cs->trans_props & 1) {
+  if (prop_enabled("opacity", 1)) {
     TransVal& tv = st["opacity"];
     if (tv.t0 == 0) {
       tv.from = tv.to = cs->opacity;
       tv.t0 = now;
-      tv.dur = cs->trans_dur;
-      tv.timing = cs->trans_timing;
+      tv.prop_dur = dur_for("opacity");
+      tv.prop_delay = delay_for("opacity");
+      tv.prop_timing = timing_for("opacity");
+      tv.dur = tv.prop_dur;
+      tv.delay = tv.prop_delay;
+      tv.timing = tv.prop_timing.empty() ? cs->trans_timing : tv.prop_timing;
     } else if (tv.to != cs->opacity) {
       retarget(tv, now);
       tv.to = cs->opacity;
@@ -1250,14 +1285,18 @@ static void apply_transitions(Node* el, ComputedStyle* cs) {
     float p = progress(tv, now);
     cs->opacity = tv.from + (tv.to - tv.from) * p;
   }
-  if (cs->trans_props & 2) {
+  if (prop_enabled("color", 2)) {
     TransVal& tv = st["color"];
     if (tv.t0 == 0) {
       tv.c_from = tv.c_to = cs->color;
       tv.c_valid = true;
       tv.t0 = now;
-      tv.dur = cs->trans_dur;
-      tv.timing = cs->trans_timing;
+      tv.prop_dur = dur_for("color");
+      tv.prop_delay = delay_for("color");
+      tv.prop_timing = timing_for("color");
+      tv.dur = tv.prop_dur;
+      tv.delay = tv.prop_delay;
+      tv.timing = tv.prop_timing.empty() ? cs->trans_timing : tv.prop_timing;
     } else if (!(tv.c_to == cs->color)) {
       retarget(tv, now);
       tv.c_to = cs->color;
@@ -1266,14 +1305,18 @@ static void apply_transitions(Node* el, ComputedStyle* cs) {
     float p = progress(tv, now);
     cs->color = transition_lerp_color(tv.c_from, tv.c_to, p);
   }
-  if (cs->trans_props & 4) {
+  if (prop_enabled("background-color", 4)) {
     TransVal& tv = st["background-color"];
     if (tv.t0 == 0) {
       tv.c_from = tv.c_to = cs->bg_color;
       tv.c_valid = true;
       tv.t0 = now;
-      tv.dur = cs->trans_dur;
-      tv.timing = cs->trans_timing;
+      tv.prop_dur = dur_for("background-color");
+      tv.prop_delay = delay_for("background-color");
+      tv.prop_timing = timing_for("background-color");
+      tv.dur = tv.prop_dur;
+      tv.delay = tv.prop_delay;
+      tv.timing = tv.prop_timing.empty() ? cs->trans_timing : tv.prop_timing;
     } else if (!(tv.c_to == cs->bg_color)) {
       retarget(tv, now);
       tv.c_to = cs->bg_color;
@@ -1282,7 +1325,7 @@ static void apply_transitions(Node* el, ComputedStyle* cs) {
     float p = progress(tv, now);
     cs->bg_color = transition_lerp_color(tv.c_from, tv.c_to, p);
   }
-  if (cs->trans_props & 8) {
+  if (prop_enabled("transform", 8)) {
     TransVal& tv = st["transform"];
     bool differs = !tv.m_valid || memcmp(tv.m_to, cs->mat, sizeof(tv.m_to)) != 0;
     if (tv.t0 == 0) {
@@ -1290,8 +1333,12 @@ static void apply_transitions(Node* el, ComputedStyle* cs) {
       memcpy(tv.m_to, cs->mat, sizeof(tv.m_to));
       tv.m_valid = true;
       tv.t0 = now;
-      tv.dur = cs->trans_dur;
-      tv.timing = cs->trans_timing;
+      tv.prop_dur = dur_for("transform");
+      tv.prop_delay = delay_for("transform");
+      tv.prop_timing = timing_for("transform");
+      tv.dur = tv.prop_dur;
+      tv.delay = tv.prop_delay;
+      tv.timing = tv.prop_timing.empty() ? cs->trans_timing : tv.prop_timing;
     } else if (differs) {
       retarget(tv, now);
       memcpy(tv.m_to, cs->mat, sizeof(tv.m_to));
