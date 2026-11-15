@@ -383,6 +383,7 @@ static void paint_bg_layers(ComputedStyle* cs, const Rect& bounds, PaintCtx& ctx
 static void paint_box(Box* b, PaintCtx& ctx) {
   ComputedStyle* cs = b->cs;
   if (!cs || cs->display == D_NONE) return;
+  if (cs->opacity <= 0.001f) return; /* invisible: skips backdrop blur too */
   g_painted_boxes++;
   Surface& s = *ctx.s;
   LayoutCtx& lc = *ctx.lc;
@@ -427,10 +428,10 @@ static void paint_box(Box* b, PaintCtx& ctx) {
    * border-color on *). Different colors per side are respected. */
   bool any_border = b->bor_t > 0 || b->bor_r > 0 || b->bor_b > 0 || b->bor_l > 0;
   if (any_border && has_radius) {
-    /* rounded box: paint the border as a ring — fill the full rounded box
-     * with the border color, the background fill below covers the inside */
+    /* rounded border: paint only the ring so transparent backgrounds work */
     Color ring = cs->border_color[0].a > 0 ? cs->border_color[0] : cs->border_color[3];
-    gfx_fill_rect(ts, {b->x, b->y, b->w, b->h}, ring, rad, &target.clip,
+    float bwd[4] = {b->bor_t, b->bor_r, b->bor_b, b->bor_l};
+    gfx_ring_rect(ts, {b->x, b->y, b->w, b->h}, rad, bwd, ring, &target.clip,
                   target.rc.active ? &target.rc : nullptr);
   } else if (any_border) {
     const RoundedClip* brc = target.rc.active ? &target.rc : nullptr;
@@ -642,6 +643,12 @@ static void dump_box_tree(Box* b, int depth, int max_depth) {
 float scrollbar_metrics(const Document* doc, float viewport_h, float page_h,
                         float scroll_y, float* thumb_y, float* thumb_h) {
   if (page_h <= viewport_h + 1) return 0; /* not scrollable */
+  /* html/body overflow:hidden suppresses the page scrollbar */
+  if (doc && ((doc->html && doc->html->cs &&
+               (doc->html->cs->overflow_y == O_HIDDEN || doc->html->cs->overflow_y == O_CLIP)) ||
+              (doc->body && doc->body->cs &&
+               (doc->body->cs->overflow_y == O_HIDDEN || doc->body->cs->overflow_y == O_CLIP))))
+    return 0;
   const ScrollbarStyle& sb = doc ? doc->sheet.sbstyle : ScrollbarStyle();
   float w = sb.width;
   if (w <= 0) return 0;

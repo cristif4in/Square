@@ -1016,11 +1016,11 @@ int square_save_png(square_instance* p, const char* path, int full_page) {
         char buf[512];
         snprintf(buf, sizeof(buf),
                  "[%2d] %s.%s disp=%d pos=%d bg=rgba(%d,%d,%d,%d) col=rgba(%d,%d,%d,%d) "
-                 "fs=%.0f fw=%d box=%s",
+                 "fs=%.0f fw=%d op=%.2f box=%s",
                  depth, n->tag.c_str(), cl.c_str(), (int)c->display, (int)c->position,
                  c->bg_color.r, c->bg_color.g, c->bg_color.b, c->bg_color.a, c->color.r,
                  c->color.g, c->color.b, c->color.a, c->font_size, (int)c->font_weight,
-                 n->box ? "Y" : "N");
+                 c->opacity, n->box ? "Y" : "N");
         std::string line = buf;
         if (n->box)
           snprintf(buf, sizeof(buf), " x=%.0f y=%.0f w=%.0f h=%.0f", n->box->x, n->box->y,
