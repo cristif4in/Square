@@ -878,12 +878,56 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     cs->css_float = s == "left" ? 1 : (s == "right" ? 2 : 0);
     return true;
   }
-  if (prop == "transition" || prop == "transition-duration") {
+  if (prop == "transition-property" || prop == "transition-duration" ||
+      prop == "transition-delay" || prop == "transition-timing-function") {
     std::string body = substitute_vars(v, rc);
-    if (prop == "transition-duration") {
-      std::string s = lc(trim(body));
-      cs->trans_dur = (float)atof(s.c_str()) * (s.find("ms") != std::string::npos ? 0.001f : 1.f);
-      if (cs->trans_dur > 0 && cs->trans_props) g_any_transitions = true;
+    auto parse_time = [](const std::string& tok) {
+      std::string s2 = lc(trim(tok));
+      float v = (float)atof(s2.c_str());
+      return s2.find("ms") != std::string::npos ? v * 0.001f : v;
+    };
+    if (prop == "transition-duration" || prop == "transition-delay") {
+      std::vector<std::string> ts;
+      split_values(lc(body), &ts);
+      if (!ts.empty()) {
+        if (prop == "transition-duration") cs->trans_dur = parse_time(ts[0]);
+        else cs->trans_delay = parse_time(ts[0]);
+      }
+      for (size_t qi = 0; qi < ts.size() && qi < cs->trans_list.size(); qi++) {
+        if (prop == "transition-duration") cs->trans_list[qi].dur = parse_time(ts[qi]);
+        else cs->trans_list[qi].delay = parse_time(ts[qi]);
+      }
+      if (cs->trans_list.empty() && !ts.empty()) {
+        ComputedStyle::TransDef d;
+        d.prop = "all";
+        d.dur = prop == "transition-duration" ? cs->trans_dur : 0;
+        d.delay = prop == "transition-delay" ? cs->trans_delay : 0;
+        d.timing = cs->trans_timing;
+        cs->trans_list.push_back(d);
+      }
+      if (!cs->trans_list.empty()) g_any_transitions = true;
+      return true;
+    }
+    if (prop == "transition-property") {
+      std::vector<std::string> ts;
+      split_values(lc(body), &ts);
+      cs->trans_list.clear();
+      for (auto& t : ts) {
+        std::string pn = lc(trim(t));
+        if (pn.empty() || pn == "none") continue;
+        ComputedStyle::TransDef d;
+        d.prop = pn;
+        d.dur = cs->trans_dur;
+        d.delay = cs->trans_delay;
+        d.timing = cs->trans_timing;
+        cs->trans_list.push_back(d);
+      }
+      if (!cs->trans_list.empty()) g_any_transitions = true;
+      return true;
+    }
+    if (prop == "transition-timing-function") {
+      cs->trans_timing = lc(trim(substitute_vars(v, rc)));
+      for (auto& d : cs->trans_list) d.timing = cs->trans_timing;
       return true;
     }
     std::vector<std::string> toks;
@@ -899,6 +943,10 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     cs->trans_props = 0;
     cs->trans_dur = 0;
     cs->trans_timing = "ease";
+    cs->trans_list.clear();
+    ComputedStyle::TransDef cur_def;
+    cur_def.prop = "all";
+    bool have_def = false;
     for (auto& t : toks) {
       std::string s = lc(t);
       if (s == "all") cs->trans_props = 15;
@@ -906,13 +954,25 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
       else if (s == "color") cs->trans_props |= 2;
       else if (s == "background-color") cs->trans_props |= 4;
       else if (s == "transform") cs->trans_props |= 8;
+      else if (s.rfind("cubic-bezier(", 0) == 0)
+        cs->trans_timing = s;
       else if (s == "ease" || s == "linear" || s == "ease-in" || s == "ease-out" || s == "ease-in-out")
         cs->trans_timing = s;
       else if (!s.empty() && (isdigit((unsigned char)s[0]) || s[0] == '.') &&
-               (s.back() == 's' || s.find("ms") == s.size() - 2))
-        cs->trans_dur = (float)atof(s.c_str()) * (s.find("ms") != std::string::npos ? 0.001f : 1.f);
+               (s.back() == 's' || s.find("ms") == s.size() - 2)) {
+        float tv2 = (float)atof(s.c_str()) * (s.find("ms") != std::string::npos ? 0.001f : 1.f);
+        if (have_def && cur_def.dur > 0) {
+          cs->trans_list.push_back(cur_def);
+          cur_def = ComputedStyle::TransDef{};
+          cur_def.prop = "all";
+        }
+        cur_def.dur = tv2;
+        have_def = true;
+      }
     }
+    if (have_def) cs->trans_list.push_back(cur_def);
     if (cs->trans_props && cs->trans_dur > 0) g_any_transitions = true;
+    if (!cs->trans_list.empty()) g_any_transitions = true;
     return true;
   }
   /* ignored-but-consumed properties (animations, transitions, cursor, will-change, etc.) */
@@ -1108,9 +1168,35 @@ static float anim_time_s() {
   return std::chrono::duration<float>(clock::now() - base).count();
 }
 
+static float cubic_bezier_ease(float x1, float y1, float x2, float y2, float t) {
+  /* solve bezier x(u) = t by bisection, then evaluate y(u) */
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  auto bez = [](float p0, float p1, float p2, float p3, float u) {
+    float v = 1 - u;
+    return v * v * v * p0 + 3 * v * v * u * p1 + 3 * v * u * u * p2 + u * u * u * p3;
+  };
+  float lo = 0, hi = 1;
+  for (int it = 0; it < 24; it++) {
+    float mid = (lo + hi) / 2;
+    float x = bez(0, x1, x2, 1, mid);
+    if (x < t) lo = mid;
+    else hi = mid;
+  }
+  float u = (lo + hi) / 2;
+  return bez(0, y1, y2, 1, u);
+}
+
 static float anim_ease(const std::string& tf, float t) {
   if (t <= 0) return 0;
   if (t >= 1) return 1;
+  if (tf.rfind("cubic-bezier(", 0) == 0) {
+    float x1 = 0.25f, y1 = 0.1f, x2 = 0.25f, y2 = 1.f;
+    if (sscanf(tf.c_str() + 13, "%f , %f , %f , %f", &x1, &y1, &x2, &y2) == 4 ||
+        sscanf(tf.c_str() + 13, "%f,%f,%f,%f", &x1, &y1, &x2, &y2) == 4) {
+      return cubic_bezier_ease(x1, y1, x2, y2, t);
+    }
+  }
   if (tf == "ease-in-out") return t * t * (3 - 2 * t);
   if (tf == "ease-in") return t * t;
   if (tf == "ease-out") return 1 - (1 - t) * (1 - t);
