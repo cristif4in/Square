@@ -349,10 +349,30 @@ float layout_flex_content(Box* b, Node* el, LayoutCtx& lc) {
   } else {
     /* column: single line */
     float line_cross = avail_w;
+    /* flex main sizes (grow/shrink) against the definite height, like rows */
     float used = 0;
-    for (auto& it : items) used += it.basis + it.m[0] + it.m[2];
+    float sum_grow = 0, sum_shrink = 0;
+    for (auto& it : items) {
+      used += it.basis + it.m[0] + it.m[2];
+      sum_grow += it.grow;
+      sum_shrink += it.shrink;
+    }
     used += items.size() > 1 ? gap_main * (float)(items.size() - 1) : 0;
     float free2 = (avail_h > 0 ? avail_h : used) - used;
+    if (free2 > 0 && sum_grow > 0) {
+      for (auto& it : items)
+        if (it.grow > 0) it.basis += free2 * it.grow / sum_grow;
+    } else if (free2 < 0 && sum_shrink > 0) {
+      float scaled = free2 / sum_shrink;
+      for (auto& it : items) {
+        if (it.shrink <= 0) continue;
+        it.basis = std::max(0.f, it.basis + scaled * it.shrink);
+      }
+    }
+    used = 0;
+    for (auto& it : items) used += it.basis + it.m[0] + it.m[2];
+    used += items.size() > 1 ? gap_main * (float)(items.size() - 1) : 0;
+    free2 = (avail_h > 0 ? avail_h : used) - used;
     float lead = 0, between = 0;
     if (free2 > 0) {
       switch (cs->justify) {
@@ -376,6 +396,8 @@ float layout_flex_content(Box* b, Node* el, LayoutCtx& lc) {
       else if (al == A_CENTER) xoff = (line_cross - w) / 2;
       else if (al == A_END) xoff = line_cross - w;
       if (w != it.w && it.node) flex_item_layout_at(it, w, lc);
+      /* grown items fill their main size (bg/border paint, content top-aligned) */
+      if (it.basis > it.h) it.h = it.basis;
       float fx = b->x + b->pad_l + b->bor_l + xoff + it.m[3];
       float fy = y + it.m[0];
       offset_box_recursive(it.box, fx - it.box->x, fy - it.box->y);
