@@ -145,8 +145,7 @@ void font_register_webface(const std::string& family, int weight, bool italic,
   WebFontFace wf;
   std::string fam = lower_copy(family);
   for (auto& c : fam)
-    if (c == '"' || c == ''') c = ' ';
-    /* strip quotes */
+    if (c == '"' || c == 39) c = ' '; /* strip quotes */
   /* trim */
   size_t a = fam.find_first_not_of(" 	");
   size_t b = fam.find_last_not_of(" 	");

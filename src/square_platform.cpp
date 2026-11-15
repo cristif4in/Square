@@ -17,9 +17,9 @@
 #include <ctime>
 #include <deque>
 #include <unordered_set>
+#include <sys/stat.h>
 #ifndef _WIN32
 #include <dirent.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -349,8 +349,8 @@ HttpResult fetch_sync(Instance* inst, const std::string& url, const char* dest) 
     /* directory URL: generate a simple HTML listing (like browsers do) */
     auto stat_is_dir = [](const std::string& p) {
 #ifdef _WIN32
-      struct _stat st;
-      if (_stat(p.c_str(), &st) != 0) return false;
+      struct stat st;
+      if (stat(p.c_str(), &st) != 0) return false;
       return (st.st_mode & _S_IFDIR) != 0;
 #else
       struct stat st;

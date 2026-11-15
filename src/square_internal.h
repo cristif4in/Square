@@ -555,6 +555,8 @@ void image_cache_clear();
 
 /* drawing primitives — all coordinates in surface space, already clipped rects are
  * passed via `clip` (axis-aligned, may be nullptr) and optional rounded clip `rc`. */
+void gfx_ring_rect(Surface& s, const Rect& r, const float radius[4], const float bwd[4],
+                   Color c, const Rect* clip, const RoundedClip* rc);
 void gfx_fill_rect(Surface& s, const Rect& r, Color c, const float radius[4],
                    const Rect* clip, const RoundedClip* rc);
 void gfx_fill_gradient(Surface& s, const Rect& r, const GradSpec& g,

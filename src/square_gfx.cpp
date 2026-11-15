@@ -160,6 +160,50 @@ void gfx_fill_rect(Surface& s, const Rect& r, Color c, const float radius[4],
   }
 }
 
+/* rounded-rect border ring: outer minus inner coverage (per-side widths) */
+void gfx_ring_rect(Surface& s, const Rect& r, const float radius[4], const float bwd[4],
+                   Color c, const Rect* clip, const RoundedClip* rc) {
+  if (c.a == 0 || r.empty()) return;
+  float rad[4] = {0, 0, 0, 0};
+  bool rounded = false;
+  if (radius) {
+    clamp_radii(radius, r.w, r.h, rad);
+    rounded = rad[0] > 0 || rad[1] > 0 || rad[2] > 0 || rad[3] > 0;
+  }
+  Rect inner{r.x + bwd[3], r.y + bwd[0], std::max(0.f, r.w - bwd[3] - bwd[1]),
+             std::max(0.f, r.h - bwd[0] - bwd[2])};
+  float irad[4] = {0, 0, 0, 0};
+  if (rounded) {
+    irad[0] = std::max(0.f, rad[0] - std::max(bwd[0], bwd[3]));
+    irad[1] = std::max(0.f, rad[1] - std::max(bwd[1], bwd[0]));
+    irad[2] = std::max(0.f, rad[2] - std::max(bwd[2], bwd[1]));
+    irad[3] = std::max(0.f, rad[3] - std::max(bwd[3], bwd[2]));
+  }
+  int x0, y0, x1, y1;
+  bounds_intersect(r, clip, &x0, &y0, &x1, &y1, s);
+  if (x0 >= x1 || y0 >= y1) return;
+  uint32_t col = color_u32(c);
+  for (int y = y0; y < y1; y++) {
+    uint32_t* row = s.row32(y);
+    float py = y + 0.5f;
+    for (int x = x0; x < x1; x++) {
+      float px = x + 0.5f;
+      float cov;
+      if (rounded) cov = cov_round_rect(px, py, r.x, r.y, r.w, r.h, rad);
+      else cov = 1;
+      if (inner.w > 0 && inner.h > 0) {
+        float icov = rounded ? cov_round_rect(px, py, inner.x, inner.y, inner.w, inner.h, irad)
+                             : 1.f;
+        cov = std::max(0.f, cov - icov);
+      }
+      cov *= clip_cov(px, py, clip, rc);
+      if (cov <= 0) continue;
+      uint32_t src = cov >= 1 ? col : scale_alpha(col, cov);
+      row[x] = blend_src_over(row[x], src);
+    }
+  }
+}
+
 /* ============================ gradients ============================ */
 void build_lut(const std::vector<GradStop>& stops, GradLUT* lut) {
   std::vector<GradStop> st = stops;

@@ -352,8 +352,12 @@ bool parse_css_color(const std::string& raw, const ResolveCtx& rc, Color* out) {
     Color c1, c2;
     if (!parse_css_color(parts[0].col, rc, &c1)) return false;
     if (!parse_css_color(parts[1].col, rc, &c2)) return false;
-    float w1 = parts[0].pct >= 0 ? parts[0].pct : 50.f;
-    float w2 = parts[1].pct >= 0 ? parts[1].pct : 50.f;
+    /* when only one percentage is given, the other color takes the remainder */
+    float w1 = parts[0].pct >= 0 ? parts[0].pct : -1.f;
+    float w2 = parts[1].pct >= 0 ? parts[1].pct : -1.f;
+    if (w1 >= 0 && w2 < 0) w2 = 100.f - w1;
+    else if (w2 >= 0 && w1 < 0) w1 = 100.f - w2;
+    else if (w1 < 0 && w2 < 0) { w1 = 50.f; w2 = 50.f; }
     if (w1 <= 0 && w2 <= 0) { *out = Color{0, 0, 0, 0}; return true; }
     float sum = w1 + w2;
     if (sum <= 0) sum = 1;
