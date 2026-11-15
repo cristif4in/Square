@@ -926,7 +926,8 @@ struct UaSheet {
     static const char* ua_css =
       "html{display:block}"
       "body{display:block;margin:8px;}"
-      "head,meta,title,link,style,script,template,base,noscript{display:none}"
+      "head,meta,title,link,style,script,template,base,noscript,dialog{display:none}"
+      "dialog[open]{display:block}"
       "div,section,article,header,footer,nav,main,aside,figure,figcaption,form,fieldset,"
       "address,blockquote,pre,hr,dl,dt,dd{display:block}"
       "center{display:block;text-align:center}"
