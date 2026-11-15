@@ -602,6 +602,8 @@ void gfx_blit(Surface& dst, const Surface& src, float alpha, const Rect* clip,
 /* composite with affine transform (a,b,c,d,e,f) around pivot (px,py) */
 void gfx_blit_matrix(Surface& dst, const Surface& src, const float mat[6],
                      float pivot_x, float pivot_y, float alpha, const Rect* clip);
+/* apply a filter() chain (brightness/contrast/...) to a region in place */
+void gfx_apply_filter(Surface& s, const Rect& r, const FilterSpec& fx);
 /* box-blur a rectangular region of a surface in place (for backdrop-filter) */
 void gfx_blur_region(Surface& s, const Rect& r, float radius);
 

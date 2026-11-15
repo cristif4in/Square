@@ -540,8 +540,8 @@ static void paint_box(Box* b, PaintCtx& ctx) {
     backdrop_blur_region(s, region, cs->backdrop_blur_px);
   }
 
-  /* transform / opacity layering */
-  bool needs_layer = cs->opacity < 0.999f || cs->has_transform;
+  /* transform / opacity / filter layering */
+  bool needs_layer = cs->opacity < 0.999f || cs->has_transform || cs->filter.active();
   Surface layer_s;
   PaintCtx layer_ctx = ctx;
   Rect layer_region;
@@ -763,6 +763,16 @@ static void paint_box(Box* b, PaintCtx& ctx) {
 
   target.rc = saved_rc;
   target.clip = saved_clip;
+
+  /* element filter() applies to the composited element region */
+  if (needs_layer && cs->filter.active()) {
+    Rect fr = {b->x, b->y, b->w, b->h};
+    if (fr.x < 0) { fr.w += -fr.x; fr.x = 0; }
+    if (fr.y < 0) { fr.h += -fr.y; fr.y = 0; }
+    if (fr.x + fr.w > layer_s.w) fr.w = layer_s.w - fr.x;
+    if (fr.y + fr.h > layer_s.h) fr.h = layer_s.h - fr.y;
+    gfx_apply_filter(layer_s, fr, cs->filter);
+  }
 
   /* composite layer back */
   if (needs_layer) {

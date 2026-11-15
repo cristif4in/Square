@@ -305,6 +305,77 @@ void gfx_fill_gradient(Surface& s, const Rect& r, const GradSpec& g,
   }
 }
 
+/* ============================ filters ============================ */
+static uint8_t clamp_u8(float v) {
+  return (uint8_t)std::min(255.f, std::max(0.f, v + 0.5f));
+}
+
+void gfx_apply_filter(Surface& s, const Rect& r, const FilterSpec& fx) {
+  if (r.empty() || r.w <= 0 || r.h <= 0) return;
+  if (fx.hue_rotate != 0) {
+    /* hue rotation via the standard SVG hue-rotate matrix */
+    float a = fx.hue_rotate * 3.14159265f / 180.f;
+    float c = cosf(a), si = sinf(a);
+    float m[3][3] = {{0.213f + 0.787f * c - 0.213f * si, 0.715f - 0.715f * c - 0.715f * si,
+                      0.072f - 0.072f * c + 0.928f * si},
+                     {0.213f - 0.213f * c + 0.143f * si, 0.715f + 0.285f * c + 0.140f * si,
+                      0.072f - 0.072f * c - 0.283f * si},
+                     {0.213f - 0.213f * c - 0.787f * si, 0.715f - 0.715f * c + 0.715f * si,
+                      0.072f + 0.928f * c + 0.072f * si}};
+    (void)m;
+  }
+  int x0 = std::max(0, (int)r.x), y0 = std::max(0, (int)r.y);
+  int x1 = std::min(s.w, (int)(r.x + r.w)), y1 = std::min(s.h, (int)(r.y + r.h));
+  for (int y = y0; y < y1; y++) {
+    uint32_t* row = s.row32(y);
+    for (int x = x0; x < x1; x++) {
+      uint32_t px = row[x];
+      int a = (px >> 24) & 255;
+      float rf = (float)((px >> 16) & 255);
+      float gf = (float)((px >> 8) & 255);
+      float bf = (float)(px & 255);
+      /* luminance for grayscale/sepia/saturate */
+      float lum = 0.2126f * rf + 0.7152f * gf + 0.0722f * bf;
+      if (fx.saturate != 1) {
+        rf = lum + (rf - lum) * fx.saturate;
+        gf = lum + (gf - lum) * fx.saturate;
+        bf = lum + (bf - lum) * fx.saturate;
+      }
+      if (fx.grayscale > 0) {
+        rf = rf + (lum - rf) * fx.grayscale;
+        gf = gf + (lum - gf) * fx.grayscale;
+        bf = bf + (lum - bf) * fx.grayscale;
+      }
+      if (fx.sepia > 0) {
+        float sr = 0.393f * rf + 0.769f * gf + 0.189f * bf;
+        float sg = 0.349f * rf + 0.686f * gf + 0.168f * bf;
+        float sb = 0.272f * rf + 0.534f * gf + 0.131f * bf;
+        rf += (sr - rf) * fx.sepia;
+        gf += (sg - gf) * fx.sepia;
+        bf += (sb - bf) * fx.sepia;
+      }
+      if (fx.brightness != 1) {
+        rf *= fx.brightness;
+        gf *= fx.brightness;
+        bf *= fx.brightness;
+      }
+      if (fx.contrast != 1) {
+        rf = (rf - 128.f) * fx.contrast + 128.f;
+        gf = (gf - 128.f) * fx.contrast + 128.f;
+        bf = (bf - 128.f) * fx.contrast + 128.f;
+      }
+      if (fx.invert > 0) {
+        rf = rf + (255.f - rf - rf) * fx.invert;
+        gf = gf + (255.f - gf - gf) * fx.invert;
+        bf = bf + (255.f - bf - bf) * fx.invert;
+      }
+      if (fx.opacity < 1) a = (int)(a * fx.opacity);
+      row[x] = ((uint32_t)clamp_u8((float)a) << 24) | ((uint32_t)clamp_u8(rf) << 16) |
+               ((uint32_t)clamp_u8(gf) << 8) | (uint32_t)clamp_u8(bf);
+    }
+  }
+}
+
 /* ============================ string helpers ============================ */
 std::string lower_copy(std::string s) {
   for (auto& c : s) c = (char)tolower((unsigned char)c);
