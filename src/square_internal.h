@@ -395,7 +395,7 @@ typedef std::unordered_map<std::string, std::string> CustomProps;
 
 /* ============================ layout box ============================ */
 
-struct GlyphPos { uint32_t gi; float x; };
+struct GlyphPos { uint32_t gi; float x; void* font = nullptr; /* set when a fallback font supplied the glyph */ };
 
 struct TextRun {
   std::string text;                      /* already transformed (upper/lower) */
@@ -542,6 +542,10 @@ struct Surface {
 void* font_resolve(const std::vector<std::string>& families, int weight, bool italic, float size_px);
 void font_register_webface(const std::string& family, int weight, bool italic,
                            std::vector<uint8_t> data);
+/* logical -> visual reordering for bidi text (simple UAX#9 approximation:
+ * reverse RTL+neutral runs as a whole, keep embedded LTR runs readable) */
+std::string bidi_visual_reorder(const std::string& text);
+void arabic_shape(std::string& text);
 float font_measure_text(void* font, const char* utf8, float letter_spacing, float word_spacing = 0);
 float font_shape(void* font, const char* utf8, float letter_spacing, std::vector<GlyphPos>* out,
                float word_spacing = 0);

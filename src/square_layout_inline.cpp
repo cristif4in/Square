@@ -32,11 +32,15 @@ static void measure_text_item(InlineItem* it, const ComputedStyle* cs, LayoutCtx
 static void push_text_items(const std::string& data, const ComputedStyle* cs, Node* tn,
                             std::vector<InlineItem>* items, LayoutCtx& lc, bool pre) {
   if (data.empty()) return;
+  std::string shaped = data;
+  arabic_shape(shaped);
+  std::string bidi_data = bidi_visual_reorder(shaped);
+  const std::string& src = bidi_data;
   if (pre) {
     size_t st = 0;
-    for (size_t i = 0; i <= data.size(); i++) {
-      if (i == data.size() || data[i] == '\n') {
-        std::string chunk = data.substr(st, i - st);
+    for (size_t i = 0; i <= src.size(); i++) {
+      if (i == src.size() || src[i] == '\n') {
+        std::string chunk = src.substr(st, i - st);
         if (!chunk.empty()) {
           InlineItem it;
           it.kind = InlineItem::I_TEXT;
@@ -56,7 +60,7 @@ static void push_text_items(const std::string& data, const ComputedStyle* cs, No
     }
     return;
   }
-  const std::string txt = transform_text(data, cs->text_transform);
+  const std::string txt = transform_text(src, cs->text_transform);
   size_t i = 0, n = txt.size();
   std::string word;
   while (i < n) {
