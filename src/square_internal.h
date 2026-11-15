@@ -640,6 +640,18 @@ void gfx_blit(Surface& dst, const Surface& src, float alpha, const Rect* clip,
 /* composite with affine transform (a,b,c,d,e,f) around pivot (px,py) */
 void gfx_blit_matrix(Surface& dst, const Surface& src, const float mat[6],
                      float pivot_x, float pivot_y, float alpha, const Rect* clip);
+/* iframe nested-document cache: fetched HTML is parsed, laid out at the box
+ * size and rasterized once, then blitted like an image */
+struct IframeData {
+  std::string html;
+  Document* doc = nullptr;
+  Box* root = nullptr;
+  Surface frame;
+  int frame_w = 0, frame_h = 0;
+};
+void iframe_cache_put(const std::string& url, std::string html);
+IframeData* iframe_cache_get(const std::string& url);
+
 /* apply a filter() chain (brightness/contrast/...) to a region in place */
 void gfx_apply_filter(Surface& s, const Rect& r, const FilterSpec& fx);
 /* box-blur a rectangular region of a surface in place (for backdrop-filter) */

@@ -587,6 +587,58 @@ HttpResult fetch_sync(Instance* inst, const std::string& url, const char* dest) 
   }
   return r;
 }
+/* ============================ iframe cache ============================ */
+static std::mutex g_iframe_mtx;
+static std::unordered_map<std::string, IframeData*> g_iframes;
+
+void iframe_cache_put(const std::string& url, std::string html) {
+  std::lock_guard<std::mutex> lk(g_iframe_mtx);
+  IframeData* d = nullptr;
+  auto it = g_iframes.find(url);
+  if (it == g_iframes.end()) {
+    d = new IframeData();
+    g_iframes[url] = d;
+  } else {
+    d = it->second;
+  }
+  d->html = std::move(html);
+  /* drop stale layout */
+  if (d->root) {
+    free_box_tree(d->root);
+    d->root = nullptr;
+  }
+  if (d->doc) {
+    delete d->doc;
+    d->doc = nullptr;
+  }
+  d->frame.free_pix();
+  d->frame_w = d->frame_h = 0;
+}
+
+IframeData* iframe_cache_get(const std::string& url) {
+  std::lock_guard<std::mutex> lk(g_iframe_mtx);
+  auto it = g_iframes.find(url);
+  return it == g_iframes.end() ? nullptr : it->second;
+}
+
+/* ensure the nested document is laid out and rasterized at the box size */
+static Surface* iframe_render(const std::string& url, int w, int h) {
+  IframeData* d = iframe_cache_get(url);
+  if (!d || d->html.empty() || w < 4 || h < 4) return nullptr;
+  if (!d->doc) d->doc = html_parse_document(d->html);
+  if (!d->doc) return nullptr;
+  if (d->frame_w == w && d->frame_h == h && d->frame.pix && d->root) return &d->frame;
+  if (d->root) free_box_tree(d->root);
+  style_tree(d->doc, w, h);
+  d->root = layout_document(d->doc, w, h, nullptr);
+  d->frame.free_pix();
+  d->frame.alloc(w, h);
+  paint_document(d->doc, d->root, &d->frame, nullptr, 0.f);
+  d->frame_w = w;
+  d->frame_h = h;
+  return &d->frame;
+}
+
 /* ============================ style/layout/paint refresh ============================ */
 static void paint_current_frame(Instance* inst, int vw, int vh) {
   inst->page_h = inst->root_box ? (int)layout_page_height(inst->root_box) : vh;
@@ -916,6 +968,32 @@ void page_main(Instance* inst, std::string url) {
       }
     }
     inst->loading = (int)img_urls.size();
+  /* --- iframes: fetch + parse nested documents (static render) --- */
+  {
+    std::unordered_set<std::string> iframe_urls;
+    std::function<void(Node*)> scan_frames = [&](Node* m) {
+      if (m->type == N_ELEMENT && m->tag == "iframe") {
+        const std::string* src = m->attr("src");
+        if (src && !src->empty() && src->rfind("data:", 0) != 0)
+          iframe_urls.insert(url_resolve(inst->final_url, *src));
+      }
+      for (Node* k : m->children) scan_frames(k);
+    };
+    if (inst->doc && inst->doc->body) scan_frames(inst->doc->body);
+    std::atomic<int> ifr_left{(int)iframe_urls.size()};
+    for (auto& iu : iframe_urls) {
+      inst->pool.submit([inst, iu, &ifr_left]() {
+        HttpResult r = fetch_sync(inst, iu);
+        if (r.ok && r.status < 400 && !r.body.empty()) {
+          std::string body(r.body.begin(), r.body.end());
+          iframe_cache_put(iu, std::move(body));
+        }
+        ifr_left--;
+      });
+    }
+    while (ifr_left > 0 && !inst->cancel) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+
     engine_log(1, "images to load: %d", (int)img_urls.size());
     for (const auto& iu : img_urls) {
       inst->pool.submit([inst, iu]() {

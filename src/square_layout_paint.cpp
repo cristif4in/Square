@@ -641,7 +641,31 @@ static void paint_box(Box* b, PaintCtx& ctx) {
       own_rc.bounds = {b->x, b->y, b->w, b->h};
       memcpy(own_rc.radius, rad_i, 4 * sizeof(float));
     }
-    if (b->node->tag == "img") {
+    if (b->node->tag == "iframe") {
+      const std::string* src = b->node->attr("src");
+      if (src && !src->empty()) {
+        Surface* frame = iframe_render(*src, (int)content.w, (int)content.h);
+        if (frame) {
+          int cw = std::min(frame->w, (int)content.w);
+          int chh = std::min(frame->h, (int)content.h);
+          for (int yy = 0; yy < chh; yy++) {
+            int dy = (int)content.y + yy;
+            if (dy < 0 || dy >= ts.h) continue;
+            if (!target.clip.contains(content.x + 0.5f, dy + 0.5f)) continue;
+            uint32_t* dr = ts.row32(dy);
+            uint32_t* sr = frame->row32(yy);
+            for (int xx = 0; xx < cw; xx++) {
+              int dx = (int)content.x + xx;
+              if (dx < 0 || dx >= ts.w) continue;
+              uint32_t c = sr[xx];
+              uint32_t sa = (c >> 24) & 255;
+              if (!sa) continue;
+              dr[dx] = blend_src_over_public(dr[dx], c);
+            }
+          }
+        }
+      }
+    } else if (b->node->tag == "img") {
       const std::string* src = b->node->attr("src");
       ImageInfo ii = src && lc.images ? lc.images->find(*src) : ImageInfo{};
       engine_log(1, "[block-img] src=%.50s decoded=%d id=%d rect=%.0f,%.0f %.0fx%.0f",

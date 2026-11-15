@@ -196,6 +196,10 @@ void replaced_intrinsic(Node* el, LayoutCtx& lc, float* w, float* h) {
       }
     }
   }
+  if (el->tag == "iframe") {
+    if (ah <= 0 && aw <= 0) { aw = 300; ah = 150; }
+    if (ah <= 0) ah = aw * 0.6f;
+  }
   /* form controls: sensible intrinsic defaults (checkbox/radio are square) */
   if (el->tag == "input") {
     const std::string* ta = el->attr("type");
