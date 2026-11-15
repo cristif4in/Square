@@ -7,13 +7,15 @@
 #include "square_style_internal.h"
 
 #include <algorithm>
+#include <atomic>
+#include <thread>
 #include <chrono>
 #include <cctype>
 #include <cstdlib>
 
 namespace sqrl {
 
-static bool g_any_transitions = false;
+static std::atomic<bool> g_any_transitions{false};
 static double g_starting_until = -1;
 bool css_starting_active() { return g_any_transitions && anim_time_s() < g_starting_until; }
 
@@ -1254,6 +1256,11 @@ static void sort_rules(std::vector<MatchedRule>* rules) {
 static void compute_style_for(Node* el, const ComputedStyle* parent, const CustomProps* parent_vars,
                               const StyleSheet& sheet, float rem, int vw, int vh, bool recurse = true);
 
+/* parallel style resolution: top-level subtrees under the body are styled
+ * concurrently (cascade state only flows downward: inherited props, custom
+ * properties and counters; shared mutation points are atomic/mutexed) */
+static void style_subtree_parallel(Document* doc, int vw, int vh);
+
 void style_tree(Document* doc, int vw, int vh) {
   ua_sheet(); /* ensure built */
   bool first_pass = !doc->starting_done;
@@ -1270,6 +1277,29 @@ void style_tree(Document* doc, int vw, int vh) {
     doc->root_font_size = doc->html->cs->font_size;
     /* recompute html + subtree if font-size changed rem basis */
     compute_style_for(doc->html, &initial, &doc->root_vars, doc->sheet, doc->root_font_size, vw, vh);
+  }
+  /* parallel pass: style top-level body subtrees on worker threads */
+  if (doc->body && doc->body->cs) {
+    std::vector<Node*> tops;
+    for (Node* c : doc->body->children)
+      if (c->type == N_ELEMENT) tops.push_back(c);
+    if (tops.size() >= 3) {
+      unsigned hw = std::thread::hardware_concurrency();
+      size_t nthreads = std::min(tops.size(), (size_t)std::max(1u, hw ? hw - 1 : 1u));
+      std::atomic<size_t> next{0};
+      auto worker = [&]() {
+        for (;;) {
+          size_t q = next.fetch_add(1);
+          if (q >= tops.size()) break;
+          compute_style_for(tops[q], doc->body->cs, &doc->root_vars, doc->sheet,
+                            doc->root_font_size, vw, vh);
+        }
+      };
+      std::vector<std::thread> pool;
+      for (size_t t = 1; t < nthreads; t++) pool.emplace_back(worker);
+      worker();
+      for (auto& th : pool) th.join();
+    }
   }
   if (first_pass && g_starting_until > 0) doc->starting_done = true;
   if (g_starting_until > 0 && anim_time_s() >= g_starting_until) {
@@ -1433,10 +1463,11 @@ static Color transition_lerp_color(const Color& a, const Color& b, float t) {
   return r;
 }
 
+static std::mutex g_trans_mtx;
 static void apply_transitions(Node* el, ComputedStyle* cs) {
-  bool any_list = !cs->trans_list.empty();
-  if (cs->trans_props == 0 && !any_list) return;
+  if (!el || !cs || cs->trans_props == 0 || cs->trans_dur <= 0) return;
   double now = anim_time_s();
+  std::lock_guard<std::mutex> tlk(g_trans_mtx);
   std::map<std::string, TransVal>& st = g_transitions[el];
   auto def_for = [&](const char* prop) -> const ComputedStyle::TransDef* {
     for (auto& d : cs->trans_list)

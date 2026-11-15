@@ -732,8 +732,50 @@ float font_measure_text(void* font, const char* utf8, float letter_spacing, floa
   return x;
 }
 
+/* shaped-run cache: (font, text, spacing) -> glyph list. Avoids re-shaping
+ * the same strings on every repaint/hover restyle (shape once, blit many). */
+struct ShapeCacheKey {
+  const void* font;
+  float ls, ws;
+  std::string text;
+  bool operator==(const ShapeCacheKey& o) const {
+    return font == o.font && ls == o.ls && ws == o.ws && text == o.text;
+  }
+};
+struct ShapeCacheKeyHash {
+  size_t operator()(const ShapeCacheKey& k) const {
+    size_t h = std::hash<const void*>()(k.font);
+    h = h * 1000003 ^ std::hash<float>()(k.ls);
+    h = h * 1000003 ^ std::hash<float>()(k.ws);
+    h = h * 1000003 ^ std::hash<std::string>()(k.text);
+    return h;
+  }
+};
+static std::mutex g_shape_mtx;
+static std::unordered_map<ShapeCacheKey, std::pair<float, std::vector<GlyphPos>>, ShapeCacheKeyHash>
+    g_shape_cache;
+
 float font_shape(void* font, const char* utf8, float letter_spacing, std::vector<GlyphPos>* out,
                  float word_spacing) {
+  if (!font) return 0;
+  if (out && utf8 && strlen(utf8) <= 256) {
+    ShapeCacheKey key{font, letter_spacing, word_spacing, std::string(utf8)};
+    std::lock_guard<std::mutex> lk(g_shape_mtx);
+    auto it = g_shape_cache.find(key);
+    if (it != g_shape_cache.end()) {
+      *out = it->second.second;
+      return it->second.first;
+    }
+    float xw = font_shape_uncached(font, utf8, letter_spacing, out, word_spacing);
+    if (g_shape_cache.size() > 1024) g_shape_cache.clear();
+    g_shape_cache.emplace(std::move(key), std::make_pair(xw, *out));
+    return xw;
+  }
+  return font_shape_uncached(font, utf8, letter_spacing, out, word_spacing);
+}
+
+static float font_shape_uncached(void* font, const char* utf8, float letter_spacing,
+                                 std::vector<GlyphPos>* out, float word_spacing) {
   if (!font) return 0;
   {
     static int dbg = 3;
