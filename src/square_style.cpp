@@ -14,6 +14,8 @@
 namespace sqrl {
 
 static bool g_any_transitions = false;
+static double g_starting_until = -1;
+bool css_starting_active() { return g_any_transitions && anim_time_s() < g_starting_until; }
 
 /* apply one declaration to computed style */
 static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, const std::string& raw_value,
@@ -937,6 +939,18 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     cs->css_float = s == "left" ? 1 : (s == "right" ? 2 : 0);
     return true;
   }
+  if (prop == "scroll-snap-type") {
+    std::string s2 = lc(trim(substitute_vars(v, rc)));
+    cs->snap_type = s2 == "none" || s2.empty() ? 0 : 1;
+    return true;
+  }
+  if (prop == "scroll-snap-align") {
+    std::string s2 = lc(trim(substitute_vars(v, rc)));
+    if (s2.find("center") != std::string::npos) cs->snap_align = 2;
+    else if (s2.find("end") != std::string::npos) cs->snap_align = 3;
+    else cs->snap_align = s2 == "none" ? 0 : 1;
+    return true;
+  }
   if (prop == "columns") {
     /* shorthand: <column-count> || <column-width>; count only supported */
     std::vector<std::string> toks;
@@ -1079,7 +1093,7 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     "transition", "transition-property", "transition-duration", "transition-timing-function",
     "transition-delay", "cursor", "will-change", "pointer-events", "user-select", "touch-action",
     "outline", "outline-width", "outline-style", "outline-color", "outline-offset", "resize",
-    "scroll-behavior", "scroll-snap-type", "scroll-margin", "scroll-padding", "visibility",
+    "scroll-behavior", "scroll-margin", "scroll-padding", "visibility",
     "unicode-bidi", "direction", "quotes", "tab-size",
     "text-overflow", "word-break", "overflow-wrap", "word-wrap", "hyphens", "text-justify",
     "font-variant", "font-feature-settings", "font-kerning", "font-stretch", "font-display",
@@ -1203,6 +1217,7 @@ struct MatchedRule {
 
 static void collect_rules_for(const Node* el, const StyleSheet& sheet, std::vector<MatchedRule>* out) {
   for (const Rule& r : sheet.rules) {
+    if (r.starting && !css_starting_active()) continue;
     for (const Selector& sel : r.sels) {
       const std::string& pe = sel.parts.back().pseudo_element;
       if (!pe.empty()) continue; /* pseudo-element rules handled separately */
@@ -1241,6 +1256,13 @@ static void compute_style_for(Node* el, const ComputedStyle* parent, const Custo
 
 void style_tree(Document* doc, int vw, int vh) {
   ua_sheet(); /* ensure built */
+  bool first_pass = !doc->starting_done;
+  if (first_pass && !doc->sheet.rules.empty()) {
+    bool has_starting = false;
+    for (auto& r : doc->sheet.rules)
+      if (r.starting) { has_starting = true; break; }
+    if (has_starting) g_starting_until = anim_time_s() + 0.05;
+  }
   ComputedStyle initial;
   init_computed(&initial, nullptr);
   compute_style_for(doc->html ? doc->html : doc->root, &initial, &doc->root_vars, doc->sheet, doc->root_font_size, vw, vh);
@@ -1248,6 +1270,11 @@ void style_tree(Document* doc, int vw, int vh) {
     doc->root_font_size = doc->html->cs->font_size;
     /* recompute html + subtree if font-size changed rem basis */
     compute_style_for(doc->html, &initial, &doc->root_vars, doc->sheet, doc->root_font_size, vw, vh);
+  }
+  if (first_pass && g_starting_until > 0) doc->starting_done = true;
+  if (g_starting_until > 0 && anim_time_s() >= g_starting_until) {
+    doc->starting_done2 = true;
+    g_starting_until = -1;
   }
 }
 

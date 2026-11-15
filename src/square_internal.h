@@ -231,6 +231,7 @@ struct Rule {
   bool media_ok = true;
   int origin = 1;                /* 0 = user-agent, 1 = author */
   int order = 0;                 /* document order for tie-breaks */
+  bool starting = false;         /* @starting-style rule */
 };
 
 /* scrollbar appearance (:::webkit-scrollbar-* / scrollbar-width / scrollbar-color) */
@@ -263,6 +264,8 @@ typedef std::unordered_map<std::string, std::string> CustomProps;
 
 /* parsed document (square_content.cpp) */
 struct Document {
+  bool starting_done = false;
+  bool starting_done2 = false;
   Node* root = nullptr;               /* N_DOCUMENT */
   Node* html = nullptr;               /* <html> element */
   Node* head = nullptr;
@@ -402,6 +405,10 @@ struct ComputedStyle {
   /* tables */
   bool border_collapse = false;          /* border-collapse: collapse */
   /* block flow */
+  uint8_t snap_type = 0;                 /* scroll-snap-type: 1 = proximity-ish snap on */
+  uint8_t snap_align = 0;                /* scroll-snap-align: 1 start, 2 center, 3 end */
+  uint8_t snap_type = 0;                 /* scroll-snap-type on the scroll container */
+  uint8_t snap_align = 0;                /* scroll-snap-align: 1 start, 2 center, 3 end */
   uint8_t clear = 0;                     /* 0 none, 1 left, 2 right, 3 both */
   /* CSS multicol */
   int column_count = 0;                  /* 0 = auto (no columns) */
@@ -711,6 +718,7 @@ void style_reanimate(Document* doc, int vw, int vh);
 /* CSS transitions (square_style.cpp) */
 void transitions_reset();
 bool css_has_transitions();
+bool css_starting_active();
 /* scrollbar geometry shared by the painter and the drag API: returns the
  * effective scrollbar width (0 = hidden/not scrollable); fills thumb_y /
  * thumb_h (track coords, track spans 0..viewport_h) when the page scrolls */

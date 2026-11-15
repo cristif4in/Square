@@ -1355,7 +1355,8 @@ js_done:;
     /* running CSS animations: repaint periodically so keyframes advance.
      * Light path: re-evaluate keyframe values + layout + paint, skipping the
      * selector cascade (that's what made animated pages lag). */
-    if (inst->doc && (inst->doc->sheet.has_animations || css_has_transitions()) &&
+    if (inst->doc && (inst->doc->sheet.has_animations || css_has_transitions() ||
+                      css_starting_active()) &&
         now_ms() - last_anim_frame >= 33) {
       last_anim_frame = now_ms();
       std::lock_guard<std::mutex> doclk(inst->doc_mtx);

@@ -349,6 +349,26 @@ void css_parse_stylesheet(const std::string& css, StyleSheet* out, int vw, int v
           if (c.i < css.size()) c.i++;
           css_parse_stylesheet(inner, out, vw, vh); /* treat @supports as matching */
         }
+      } else if (name == "starting-style") {
+        c.ws();
+        if (c.peek() != '{') { c.skip_until_char(';'); continue; }
+        c.i++;
+        size_t start = c.i;
+        int depth = 1;
+        while (c.i < css.size() && depth > 0) {
+          if (css[c.i] == '{') depth++;
+          else if (css[c.i] == '}') depth--;
+          if (depth > 0) c.i++;
+        }
+        std::string inner = css.substr(start, c.i - start);
+        if (c.i < css.size()) c.i++;
+        StyleSheet tmp;
+        css_parse_stylesheet(inner, &tmp, vw, vh);
+        for (auto& r : tmp.rules) {
+          r.starting = true;
+          r.origin = 1;
+          out->rules.push_back(r);
+        }
       } else if (name == "font-face") {
         c.ws();
         if (c.peek() != '{') { c.skip_until_char(';'); continue; }

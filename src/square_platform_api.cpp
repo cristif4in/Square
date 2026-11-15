@@ -929,6 +929,27 @@ static void apply_scroll(Instance* inst, int y) {
   int scroll_max = inst->page_h - vh;
   if (scroll_max < 0) scroll_max = 0;
   int new_y = std::max(0, std::min(y, scroll_max));
+  /* scroll snapping: when the root has scroll-snap-type, snap to the nearest
+   * aligned descendant (start/center/end) */
+  if (inst->root_box && inst->doc && inst->doc->body && inst->doc->body->cs &&
+      inst->doc->body->cs->snap_type) {
+    float best = -1;
+    float bestd = 1e9f;
+    std::function<void(Box*)> scan = [&](Box* k) {
+      if (k->node && k->node->cs && k->node->cs->snap_align) {
+        float cand = k->y;
+        if (k->node->cs->snap_align == 2) cand = k->y + k->h / 2 - vh / 2.f;
+        else if (k->node->cs->snap_align == 3) cand = k->y + k->h - vh;
+        cand = std::max(0.f, std::min(cand, (float)scroll_max));
+        float d2 = fabsf(cand - (float)new_y);
+        if (d2 < bestd) { bestd = d2; best = cand; }
+      }
+      for (Box* kk : k->kids) scan(kk);
+      for (Box* kk : k->out_of_flow) scan(kk);
+    };
+    scan(inst->root_box);
+    if (best >= 0 && bestd < vh * 0.5f) new_y = (int)best;
+  }
   std::lock_guard<std::mutex> plk(inst->paint_mtx);
   if (!inst->latest.pix || !inst->doc || !inst->root_box) {
     inst->scroll_y = new_y;
