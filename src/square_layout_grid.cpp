@@ -191,6 +191,16 @@ float layout_grid_content(Box* b, Node* el, LayoutCtx& lc) {
       it.box->w = span_w;
       it.box->h = it.h;
       if (it.node && it.node->cs->height.unit == L_AUTO) it.box->h = rowh[r];
+      /* vertical alignment inside the cell (place-items / align-items) */
+      if (it.h < rowh[r] && (cs->align == A_CENTER || cs->align == A_END)) {
+        float dy2 = cs->align == A_CENTER ? (rowh[r] - it.h) / 2.f : (rowh[r] - it.h);
+        for (auto* k : it.box->kids) offset_box_recursive(k, 0, dy2);
+        for (auto& f : it.box->frags) {
+          f.rect.y += dy2;
+          if (f.kind == InlineFrag::F_TEXT) f.run.y += dy2;
+        }
+        it.box->last_line_baseline += dy2;
+      }
     }
     y += rowh[r] + row_gap;
   }

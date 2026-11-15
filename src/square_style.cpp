@@ -504,6 +504,26 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     else cs->align = A_STRETCH;
     return true;
   }
+  if (prop == "place-items" || prop == "justify-items") {
+    std::vector<std::string> toks;
+    split_values(lc(v), &toks);
+    auto map_align = [&](const std::string& s2) {
+      if (s2 == "flex-start" || s2 == "start") cs->align = A_START;
+      else if (s2 == "flex-end" || s2 == "end") cs->align = A_END;
+      else if (s2 == "center") cs->align = A_CENTER;
+      else if (s2 == "baseline") cs->align = A_BASELINE;
+      else cs->align = A_STRETCH;
+    };
+    if (prop == "justify-items") {
+      /* grid item inline-axis alignment: only stretch (default) is laid out;
+       * accept and map start/center/end to the block-axis field as approximation */
+      if (!toks.empty()) map_align(toks[0]);
+    } else {
+      /* place-items: <align-items> [/ <justify-items>] — block-axis part drives layout */
+      if (!toks.empty()) map_align(toks[0]);
+    }
+    return true;
+  }
   if (prop == "align-self") {
     if (lc(v) == "auto") { cs->align_self_auto = true; return true; }
     cs->align_self_auto = false;
@@ -883,7 +903,7 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     "font-variant", "font-feature-settings", "font-kerning", "font-stretch", "font-display",
     "src", "unicode-range", "text-rendering", "-webkit-font-smoothing", "-moz-osx-font-smoothing",
     "mix-blend-mode", "isolation", "contain", "all", "grid-area", "grid-auto-flow", "grid-auto-rows",
-    "grid-auto-columns", "grid-template-areas", "place-items", "place-content", "place-self",
+    "grid-auto-columns", "grid-template-areas", "place-content", "place-self",
     "column-count", "column-gap", "column-rule", "columns", "mask", "mask-image", "clip-path",
     "text-wrap", "text-indent", "caret-color", "accent-color", "color-scheme",
     "forced-color-adjust", "appearance", "-webkit-appearance", "-webkit-box-orient",
