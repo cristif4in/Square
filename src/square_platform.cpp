@@ -357,23 +357,43 @@ HttpResult fetch_sync(Instance* inst, const std::string& url, const char* dest) 
       return S_ISDIR(st.st_mode);
 #endif
     };
+    auto list_dir = [&](const std::string& dirp,
+                        std::vector<std::pair<std::string, bool>>* out) {
+#ifdef _WIN32
+      std::string pat = dirp;
+      if (pat.back() != '/' && pat.back() != '\\') pat += "/";
+      pat += "*";
+      WIN32_FIND_DATAA fd;
+      HANDLE h = FindFirstFileA(pat.c_str(), &fd);
+      if (h == INVALID_HANDLE_VALUE) return false;
+      do {
+        std::string name = fd.cFileName;
+        if (name == "." || name == "..") continue;
+        out->push_back({name, (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0});
+      } while (FindNextFileA(h, &fd));
+      FindClose(h);
+      return true;
+#else
+      DIR* d = opendir(dirp.c_str());
+      if (!d) return false;
+      struct dirent* ent;
+      while ((ent = readdir(d))) {
+        std::string name = ent->d_name;
+        if (name == "." || name == "..") continue;
+        out->push_back({name, stat_is_dir(dirp + name)});
+      }
+      closedir(d);
+      return true;
+#endif
+    };
     if (!path.empty() && path.back() != '/' && path.back() != '\\') {
       if (stat_is_dir(path)) path += "/";
     }
     if (!path.empty() && (path.back() == '/' || path.back() == '\\')) {
       std::string dir = path;
-      if (dir.size() == 2 && dir[1] == ':') dir += "."; /* drive root */
-      DIR* d = opendir(dir.c_str());
-      if (d) {
-        struct dirent* ent;
-        std::vector<std::pair<std::string, bool>> entries; /* name, is_dir */
-        while ((ent = readdir(d))) {
-          std::string name = ent->d_name;
-          if (name == "." || name == "..") continue;
-          bool is_dir = stat_is_dir(path + name);
-          entries.push_back({name, is_dir});
-        }
-        closedir(d);
+      if (dir.size() == 2 && dir[1] == ':') dir += "/"; /* drive root */
+      std::vector<std::pair<std::string, bool>> entries; /* name, is_dir */
+      if (list_dir(dir, &entries)) {
         std::sort(entries.begin(), entries.end(), [](auto& a, auto& b) {
           if (a.second != b.second) return a.second; /* dirs first */
           return plat_lc(a.first) < plat_lc(b.first);

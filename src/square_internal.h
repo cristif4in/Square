@@ -342,7 +342,10 @@ struct ComputedStyle {
   float anim_duration = 0, anim_delay = 0;
   bool anim_infinite = false;
   int anim_iterations = 1;
-  uint8_t list_style = 0;                /* 0 none, 1 disc */
+  uint8_t list_style = 0;                /* 0 none, 1 marker shown */
+  /* marker kind: 1 disc, 2 circle, 3 square, 4 decimal, 5 lower-alpha,
+   * 6 upper-alpha, 7 lower-roman, 8 upper-roman */
+  uint8_t list_kind = 1;
   bool visibility_hidden = false;        /* visibility: hidden (subtree skipped) */
   /* tables */
   bool border_collapse = false;          /* border-collapse: collapse */
