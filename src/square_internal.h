@@ -413,6 +413,8 @@ struct Box {
   /* marker for list items */
   std::string marker_text;
   float marker_w = 0;
+  uint8_t marker_kind = 0;   /* shape bullet kinds 1-3; 0 = text marker */
+  int marker_num = 0;
   /* transform pivot */
   float pivot_x() const { return w / 2; }
   float pivot_y() const { return h / 2; }

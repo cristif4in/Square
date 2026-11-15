@@ -7,10 +7,45 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 
 namespace sqrl {
 
 static void layout_out_of_flow_children(Box* b, Node* el, LayoutCtx& lc);
+
+/* format an ordered-list marker: decimal / alpha / roman counters */
+static std::string format_list_marker(int kind, int num) {
+  char buf[32];
+  if (num < 0) num = 0;
+  if (kind == 4) {
+    snprintf(buf, sizeof(buf), "%d.", num);
+    return buf;
+  }
+  if (kind == 5 || kind == 6) {
+    /* a..z, aa..zz (0 => 'z' wrap like browsers) */
+    std::string s;
+    int n = std::max(1, num);
+    while (n > 0) {
+      n--;
+      char c = (char)('a' + (kind == 5 ? 0 : 'A' - 'a') + n % 26);
+      s.insert(s.begin(), c);
+      n /= 26;
+    }
+    return s + ".";
+  }
+  if (kind == 7 || kind == 8) {
+    static const struct { int v; const char* lo; const char* up; } R[] = {
+      {1000, "m", "M"}, {900, "cm", "CM"}, {500, "d", "D"}, {400, "cd", "CD"},
+      {100, "c", "C"}, {90, "xc", "XC"}, {50, "l", "L"}, {40, "xl", "XL"},
+      {10, "x", "X"}, {9, "ix", "IX"}, {5, "v", "V"}, {4, "iv", "IV"}, {1, "i", "I"}};
+    std::string s;
+    int n = std::max(1, num);
+    for (auto& r : R)
+      while (n >= r.v) { s += (kind == 7 ? r.lo : r.up); n -= r.v; }
+    return s + ".";
+  }
+  return ".";
+}
 
 /* ============================ block layout ============================ */
 float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
@@ -276,8 +311,59 @@ float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
 
   if (cs->display == D_LIST_ITEM && cs->list_style != 0) {
     void* f = font_for(cs);
-    b->marker_text = "•";
-    b->marker_w = f ? font_measure_text(f, "•", 0) + 8 : 14;
+    Node* n = b->node;
+    /* ordinal among list-item siblings */
+    int ord = 1;
+    if (n && n->parent) {
+      ord = 0;
+      for (Node* sib : n->parent->children) {
+        if (sib == n) break;
+        if (sib->type == N_ELEMENT &&
+            (sib->tag == "li" || (sib->cs && sib->cs->display == D_LIST_ITEM)))
+          ord++;
+      }
+      ord++;
+    }
+    /* start / reversed from the owning list element */
+    int start = 1;
+    bool reversed = false;
+    Node* lst = n ? n->parent : nullptr;
+    if (lst && lst->type == N_ELEMENT) {
+      if (const std::string* sv = lst->attr("start")) start = atoi(sv->c_str());
+      if (lst->attr("reversed")) reversed = true;
+      int num = reversed ? start - (ord - 1) : start + (ord - 1);
+      b->marker_num = num;
+      /* <ol type> presentational hint: overrides UA decimal, not author CSS */
+      int kind = cs->list_kind;
+      if (kind == 4) {
+        if (const std::string* tv = lst->attr("type")) {
+          char t = (*tv)[0];
+          if (t == 'a') kind = 5;
+          else if (t == 'A') kind = 6;
+          else if (t == 'i') kind = 7;
+          else if (t == 'I') kind = 8;
+        }
+      }
+      b->marker_kind = kind <= 3 ? (uint8_t)kind : 0;
+      if (kind <= 3) {
+        b->marker_w = std::max(10.f, cs->font_size * 0.45f);
+      } else {
+        b->marker_text = format_list_marker(kind, num);
+        b->marker_w = f ? font_measure_text(f, b->marker_text.c_str(), 0) + 8 : 14;
+      }
+    } else {
+      /* detached / styled li without a list parent */
+      /* detached / styled li without a list parent */
+      int kind = cs->list_kind;
+      b->marker_num = ord;
+      b->marker_kind = kind <= 3 ? (uint8_t)kind : 0;
+      if (kind <= 3) {
+        b->marker_w = std::max(10.f, cs->font_size * 0.45f);
+      } else {
+        b->marker_text = format_list_marker(kind, ord);
+        b->marker_w = f ? font_measure_text(f, b->marker_text.c_str(), 0) + 8 : 14;
+      }
+    }
   }
   float content_h = cur_y;
   b->last_line_baseline = y0 + content_h;

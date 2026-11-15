@@ -779,8 +779,43 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     }
     return true; /* animation-direction / fill-mode / play-state: consumed */
   }
-  if (prop == "list-style-type") { cs->list_style = lc(v) == "none" ? 0 : 1; return true; }
-  if (prop == "list-style") { cs->list_style = lc(v).find("none") != std::string::npos ? 0 : 1; return true; }
+  if (prop == "list-style-type") {
+    std::string t = lc(trim(v));
+    if (t == "none") { cs->list_style = 0; cs->list_kind = 0; }
+    else if (t == "disc") cs->list_kind = 1;
+    else if (t == "circle") cs->list_kind = 2;
+    else if (t == "square") cs->list_kind = 3;
+    else if (t == "decimal") cs->list_kind = 4;
+    else if (t == "lower-alpha" || t == "lower-latin") cs->list_kind = 5;
+    else if (t == "upper-alpha" || t == "upper-latin") cs->list_kind = 6;
+    else if (t == "lower-roman") cs->list_kind = 7;
+    else if (t == "upper-roman") cs->list_kind = 8;
+    else cs->list_kind = 1;
+    if (cs->list_kind != 0) cs->list_style = 1;
+    return true;
+  }
+  if (prop == "list-style") {
+    std::string lv = lc(v);
+    if (lv.find("none") != std::string::npos) { cs->list_style = 0; cs->list_kind = 0; }
+    else {
+      std::vector<std::string> toks;
+      split_values(v, &toks);
+      bool set = false;
+      for (auto& t : toks) {
+        std::string lt = lc(trim(t));
+        uint8_t k = 0;
+        if (lt == "disc") k = 1; else if (lt == "circle") k = 2; else if (lt == "square") k = 3;
+        else if (lt == "decimal") k = 4;
+        else if (lt == "lower-alpha" || lt == "lower-latin") k = 5;
+        else if (lt == "upper-alpha" || lt == "upper-latin") k = 6;
+        else if (lt == "lower-roman") k = 7; else if (lt == "upper-roman") k = 8;
+        if (k) { cs->list_kind = k; set = true; }
+      }
+      if (!set && cs->list_kind == 0) cs->list_kind = 1;
+      cs->list_style = 1;
+    }
+    return true;
+  }
   if (prop == "border-collapse") { cs->border_collapse = lc(v) == "collapse"; return true; }
   if (prop == "clear") {
     std::string s = lc(v);
@@ -875,6 +910,7 @@ struct UaSheet {
       "h6{display:block;font-size:0.67em;font-weight:700;margin:2.33em 0}"
       "p{display:block;margin:1em 0}"
       "ul,ol{display:block;margin:1em 0;padding-left:40px}"
+      "ol{list-style-type:decimal}"
       "li{display:list-item}"
       "dd{margin-left:40px}"
       "b,strong{font-weight:700}"

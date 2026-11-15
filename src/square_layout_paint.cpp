@@ -517,6 +517,31 @@ static void paint_box(Box* b, PaintCtx& ctx) {
       gfx_draw_glyphs(ts, f, b->x + b->pad_l + b->bor_l - b->marker_w + 2, b->y + b->pad_t + b->bor_t + font_ascent(f),
                       glyphs, cs->color, target.alpha, &target.clip);
     }
+  } else if (b->marker_kind >= 1 && b->marker_kind <= 3) {
+    /* shape bullets: disc / circle / square */
+    float size = std::max(4.f, cs->font_size * 0.32f);
+    void* f = font_for(cs);
+    float mid_y = b->y + b->pad_t + b->bor_t + (f ? font_ascent(f) * 0.55f : size);
+    float cx = b->x + b->pad_l + b->bor_l - b->marker_w * 0.5f + 2;
+    Color bc = cs->color;
+    float rad = b->marker_kind == 3 ? 0 : size * 0.5f;
+    Rect m{cx - size * 0.5f, mid_y - size * 0.5f, size, size};
+    if (b->marker_kind == 2) {
+      /* hollow ring: outer fill + inner punch in box background color */
+      float outer = size * 1.15f;
+      Rect o{cx - outer * 0.5f, mid_y - outer * 0.5f, outer, outer};
+      float orad[4] = {outer * 0.5f, outer * 0.5f, outer * 0.5f, outer * 0.5f};
+      gfx_fill_rect(ts, o, bc, orad, &target.clip, target.rc.active ? &target.rc : nullptr);
+      float irad[4] = {rad, rad, rad, rad};
+      Rect inner{cx - size * 0.22f, mid_y - size * 0.22f, size * 0.44f, size * 0.44f};
+      Color bg = cs->bg_color;
+      gfx_fill_rect(ts, inner, Color{(uint8_t)255, bg.r, bg.g, bg.b}, irad, &target.clip,
+                    target.rc.active ? &target.rc : nullptr);
+      (void)rad;
+    } else {
+      float mrad[4] = {rad, rad, rad, rad};
+      gfx_fill_rect(ts, m, bc, mrad, &target.clip, target.rc.active ? &target.rc : nullptr);
+    }
   }
 
   /* children clip */
