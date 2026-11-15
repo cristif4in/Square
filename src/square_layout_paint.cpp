@@ -675,7 +675,7 @@ static void draw_scrollbar(Surface& s, const Document* doc, Box* root, float scr
 }
 
 void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images,
-                    float scroll_y, const TextSelection* sel) {
+                    float scroll_y, const TextSelection* sel, const Rect* clip) {
   g_painted_boxes = g_painted_frags = g_painted_images = 0;
   if (getenv("SQRL_DUMP_TREE") && root)
     dump_box_tree(root, 0, getenv("SQRL_DUMP_DEPTH") ? atoi(getenv("SQRL_DUMP_DEPTH")) : 4);
@@ -688,7 +688,7 @@ void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images
   lc.root_box = root;
   PaintCtx ctx;
   ctx.s = s;
-  ctx.clip = {0, 0, (float)s->w, (float)s->h};
+  ctx.clip = clip ? *clip : Rect{0, 0, (float)s->w, (float)s->h};
   ctx.rc = RoundedClip{};
   ctx.alpha = 1;
   ctx.lc = &lc;
@@ -697,7 +697,7 @@ void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images
   Color canvas{255, 255, 255, 255};
   if (doc->html && doc->html->cs && doc->html->cs->bg_color.a > 0) canvas = doc->html->cs->bg_color;
   if (doc->body && doc->body->cs && doc->body->cs->bg_color.a > 0) canvas = doc->body->cs->bg_color;
-  gfx_fill_rect(*s, {0, 0, (float)s->w, (float)s->h}, canvas, nullptr, nullptr, nullptr);
+  gfx_fill_rect(*s, ctx.clip, canvas, nullptr, nullptr, nullptr);
   /* sticky: collect boxes pinned by top/bottom against the viewport */
   std::vector<std::pair<Box*, float>> sticky;
   if (root) {

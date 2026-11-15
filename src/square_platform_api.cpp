@@ -856,16 +856,61 @@ int square_get_page_size(square_instance* p, int* out_w, int* out_h) {
   return inst->root_box ? 1 : 0;
 }
 
-/* repaint at a given scroll offset (shared by set_scroll and scrollbar drag) */
+/* repaint at a given scroll offset (shared by set_scroll and scrollbar drag).
+ * Fast path: blit-scroll — shift the already-rendered content and repaint only
+ * the exposed strip instead of rasterizing the whole page on every scroll. */
 static void apply_scroll(Instance* inst, int y) {
   std::lock_guard<std::mutex> doclk(inst->doc_mtx);
   int vh = inst->vh;
   int scroll_max = inst->page_h - vh;
   if (scroll_max < 0) scroll_max = 0;
-  inst->scroll_y = std::max(0, std::min(y, scroll_max));
+  int new_y = std::max(0, std::min(y, scroll_max));
   std::lock_guard<std::mutex> plk(inst->paint_mtx);
-  if (!inst->latest.pix || !inst->doc || !inst->root_box) return;
-  paint_document(inst->doc, inst->root_box, &inst->latest, &inst->images, (float)inst->scroll_y);
+  if (!inst->latest.pix || !inst->doc || !inst->root_box) {
+    inst->scroll_y = new_y;
+    return;
+  }
+  int prev_y = inst->scroll_y;
+  int dy = new_y - prev_y;
+  /* sticky/fixed boxes track the viewport: blitting would smear them */
+  bool has_viewport_boxes = false;
+  {
+    std::function<void(Box*)> scan = [&](Box* b) {
+      if (has_viewport_boxes || !b) return;
+      if (b->cs && (b->cs->position == P_STICKY || b->cs->position == P_FIXED))
+        has_viewport_boxes = true;
+      for (Box* k : b->kids)
+        if (!has_viewport_boxes) scan(k);
+      for (Box* o : b->out_of_flow)
+        if (!has_viewport_boxes) scan(o);
+    };
+    scan(inst->root_box);
+  }
+  float sbw = scrollbar_metrics(inst->doc, (float)vh, (float)inst->page_h, (float)prev_y,
+                                nullptr, nullptr);
+  int sbwi = (int)sbw + ((sbw - (float)(int)sbw) > 0.f ? 1 : 0);
+  int content_w = inst->vw - sbwi; /* blit only left of the scrollbar */
+  inst->scroll_y = new_y;
+  Surface& s = inst->latest;
+  if (dy != 0 && !has_viewport_boxes && dy > -vh && dy < vh && content_w > 0) {
+    int row_bytes = content_w * 4;
+    if (dy > 0) {
+      for (int r = 0; r < vh - dy; r++)  /* content moves up: src rows ahead */
+        memcpy(s.row32(r), s.row32(r + dy), row_bytes);
+    } else {
+      for (int r = vh - 1; r >= -dy; r--) /* content moves down: src rows behind */
+        memcpy(s.row32(r), s.row32(r + dy), row_bytes);
+    }
+    Rect strip;
+    if (dy > 0)
+      strip = {0, (float)(vh - dy), (float)content_w, (float)dy};
+    else
+      strip = {0, 0, (float)content_w, (float)(-dy)};
+    paint_document(inst->doc, inst->root_box, &s, &inst->images, (float)inst->scroll_y,
+                   nullptr, &strip);
+  } else {
+    paint_document(inst->doc, inst->root_box, &s, &inst->images, (float)inst->scroll_y);
+  }
 }
 
 /* returns 1 when viewport x is inside the page scrollbar */

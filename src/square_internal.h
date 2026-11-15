@@ -597,9 +597,11 @@ Box* layout_document(Document* doc, int vw, int vh, ImageCacheView* images);
 float layout_page_height(Box* root);
 void free_box_tree(Box* b);
 void offset_box_recursive(Box* b, float dx, float dy);
-/* paint whole document into surface */
+/* paint whole document into surface; clip limits the repaint region
+ * (used by blit-scroll: only the exposed strip is repainted) */
 void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images,
-                    float scroll_y = 0, const TextSelection* sel = nullptr);
+                    float scroll_y = 0, const TextSelection* sel = nullptr,
+                    const Rect* clip = nullptr);
 /* animation-only style update: re-evaluates keyframe values on the existing
  * computed styles WITHOUT the full selector cascade (cheap enough per frame) */
 void style_reanimate(Document* doc, int vw, int vh);
