@@ -38,6 +38,16 @@ struct FontSource {
   std::vector<uint8_t> owned;
   int weight;
 };
+
+/* @font-face fonts fetched from the network, registered per family+weight */
+struct WebFontFace {
+  std::string family;
+  int weight = 400;
+  bool italic = false;
+  std::shared_ptr<std::vector<uint8_t>> data;
+};
+static std::vector<WebFontFace> g_webfonts;
+
 static std::vector<FontSource> g_inter_sources;
 static bool g_inter_loaded = false;
 
@@ -123,6 +133,33 @@ static FontSource* find_system_font(const std::string& family) {
   return nullptr;
 }
 
+void font_register_webface(const std::string& family, int weight, bool italic,
+                           std::vector<uint8_t> data) {
+  /* keep only bytes stb_truetype can actually open (ttf/otf) */
+  if (data.size() < 12) return;
+  if (stbtt_GetFontOffsetForIndex(data.data(), 0) < 0) {
+    engine_log(2, "[font] @font-face '%s': not a ttf/otf (woff2?) — skipped", family.c_str());
+    return;
+  }
+  std::lock_guard<std::mutex> lk(g_font_mtx);
+  WebFontFace wf;
+  std::string fam = lower_copy(family);
+  for (auto& c : fam)
+    if (c == '"' || c == ''') c = ' ';
+    /* strip quotes */
+  /* trim */
+  size_t a = fam.find_first_not_of(" 	");
+  size_t b = fam.find_last_not_of(" 	");
+  fam = a == std::string::npos ? "" : fam.substr(a, b - a + 1);
+  wf.family = fam;
+  wf.weight = weight;
+  wf.italic = italic;
+  wf.data = std::make_shared<std::vector<uint8_t>>(std::move(data));
+  engine_log(1, "[font] registered @font-face '%s' w%d (%zu bytes)", wf.family.c_str(), weight,
+             wf.data->size());
+  g_webfonts.push_back(std::move(wf));
+}
+
 void* font_resolve(const std::vector<std::string>& families, int weight, bool italic, float size_px) {
   load_inter_sources();
   scan_system_fonts();
@@ -136,6 +173,32 @@ void* font_resolve(const std::vector<std::string>& families, int weight, bool it
   if (it != g_font_cache.end()) return it->second;
 
   FontSource* src = nullptr;
+  /* @font-face fonts win over fallbacks for their exact family */
+  {
+    WebFontFace* best = nullptr;
+    int bestd = 1 << 30;
+    for (auto& wf : g_webfonts) {
+      if (wf.family != fam0) continue;
+      if (italic && !wf.italic) continue;
+      if (!italic && wf.italic) continue;
+      int d = abs(wf.weight - weight);
+      if (d < bestd) {
+        bestd = d;
+        best = &wf;
+      }
+    }
+    if (best) {
+      /* FontSource view over the shared bytes; font_resolve copies owned bytes
+       * into the FontEntry, so a stack-local source is safe here */
+      FontSource wsrc;
+      wsrc.owned = *best->data;
+      wsrc.data = wsrc.owned.data();
+      wsrc.len = wsrc.owned.size();
+      wsrc.weight = best->weight;
+      src = &wsrc;
+      goto have_src;
+    }
+  }
   if (fam0.find("inter") != std::string::npos || fam0 == "sans-serif" || fam0 == "system-ui" ||
       fam0 == "-apple-system" || fam0 == "arial" || fam0 == "helvetica" || fam0 == "ui-sans-serif" ||
       fam0.find("segoe") != std::string::npos || fam0.find("roboto") != std::string::npos ||
@@ -152,6 +215,7 @@ void* font_resolve(const std::vector<std::string>& families, int weight, bool it
     if (!src) src = pick_inter(weight);
   }
   if (!src) return nullptr;
+have_src:
 
   FontEntry* fe = new FontEntry();
   /* keep system font bytes alive in fe->data; embedded fonts point at static data */

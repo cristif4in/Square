@@ -8,6 +8,7 @@
 #include "square_layout_internal.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cctype>
@@ -830,6 +831,40 @@ void page_main(Instance* inst, std::string url) {
     }
     engine_log(1, "css: %d rules, %d font-faces", (int)inst->doc->sheet.rules.size(),
                (int)inst->doc->sheet.fontfaces.size());
+  }
+
+  /* --- web fonts from @font-face: fetch + register BEFORE first layout --- */
+  {
+    std::atomic<int> ff_pending{0};
+    for (auto& ff : inst->doc->sheet.fontfaces) {
+      for (auto& s : ff.srcs) {
+        if (s.url.empty()) continue;
+        std::string lf = s.format.empty() ? s.url : s.format;
+        for (auto& c : lf) c = (char)tolower((unsigned char)c);
+        /* stb_truetype reads ttf/otf only; skip woff/woff2 sources */
+        if (lf.find("woff") != std::string::npos) continue;
+        std::string url =
+            s.url.rfind("data:", 0) == 0 ? s.url : url_resolve(inst->final_url, s.url);
+        std::string fam = ff.family;
+        int fw = ff.weight;
+        bool fi = ff.italic;
+        ff_pending++;
+        inst->pool.submit([inst, url, fam, fw, fi, &ff_pending]() {
+          for (int attempt = 0; attempt < 2 && !inst->cancel; attempt++) {
+            HttpResult r = fetch_sync(inst, url, "font");
+            if (r.ok && r.status < 400 && !r.body.empty()) {
+              font_register_webface(fam, fw, fi, std::move(r.body));
+              break;
+            }
+            if (attempt == 0) std::this_thread::sleep_for(std::chrono::milliseconds(500));
+          }
+          ff_pending--;
+        });
+        break; /* first usable source per rule */
+      }
+    }
+    /* wait so the first layout picks up the web fonts */
+    while (ff_pending > 0 && !inst->cancel) std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
 
   /* initial layout so something renders even without JS */

@@ -540,6 +540,8 @@ struct Surface {
 
 /* font request → cached handle. families in preference order ("Inter", "sans-serif"...) */
 void* font_resolve(const std::vector<std::string>& families, int weight, bool italic, float size_px);
+void font_register_webface(const std::string& family, int weight, bool italic,
+                           std::vector<uint8_t> data);
 float font_measure_text(void* font, const char* utf8, float letter_spacing, float word_spacing = 0);
 float font_shape(void* font, const char* utf8, float letter_spacing, std::vector<GlyphPos>* out,
                float word_spacing = 0);
