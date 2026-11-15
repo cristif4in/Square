@@ -542,6 +542,33 @@ static void paint_box(Box* b, PaintCtx& ctx) {
 
   /* transform / opacity / filter layering */
   bool needs_layer = cs->opacity < 0.999f || cs->has_transform || cs->filter.active();
+  if (cs->has_3d) {
+    /* project the box corners through the 4x4 (relative to the pivot), then
+     * derive the affine approximation used for painting */
+    float pivot_x = b->x + (cs->tx_ox.unit == L_AUTO || cs->tx_ox.unit == L_NORMAL
+                                ? b->w / 2.f
+                                : res_l(cs->tx_ox, b->w, cs->font_size, lc));
+    float pivot_y = b->y + (cs->tx_oy.unit == L_AUTO || cs->tx_oy.unit == L_NORMAL
+                                ? b->h / 2.f
+                                : res_l(cs->tx_oy, b->h, cs->font_size, lc));
+    auto proj = [&](float px, float py) {
+      float rx = px - pivot_x, ry = py - pivot_y;
+      float x = cs->mat4[0] * rx + cs->mat4[1] * ry + cs->mat4[3];
+      float y = cs->mat4[4] * rx + cs->mat4[5] * ry + cs->mat4[7];
+      float w = cs->mat4[12] * rx + cs->mat4[13] * ry + cs->mat4[15];
+      if (fabsf(w) < 1e-6f) w = 1e-6f;
+      return std::pair<float, float>{x / w + pivot_x, y / w + pivot_y};
+    };
+    auto q0 = proj(b->x, b->y);
+    auto q1 = proj(b->x + b->w, b->y);
+    auto q2 = proj(b->x, b->y + b->h);
+    float m0 = b->w > 1e-3f ? (q1.first - q0.first) / b->w : 1.f;
+    float m1 = b->w > 1e-3f ? (q1.second - q0.second) / b->w : 0.f;
+    float m2 = b->h > 1e-3f ? (q2.first - q0.first) / b->h : 0.f;
+    float m3 = b->h > 1e-3f ? (q2.second - q0.second) / b->h : 1.f;
+    float am[6] = {m0, m1, m2, m3, q0.first - pivot_x, q0.second - pivot_y};
+    memcpy(cs->mat, am, sizeof(am));
+  }
   Surface layer_s;
   PaintCtx layer_ctx = ctx;
   Rect layer_region;

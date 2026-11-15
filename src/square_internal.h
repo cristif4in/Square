@@ -368,6 +368,10 @@ struct ComputedStyle {
   std::vector<Shadow> text_shadows;
   bool has_transform = false;
   float mat[6] = {1, 0, 0, 1, 0, 0};     /* a b c d e f */
+  float mat4[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}; /* row-major, column-vector */
+  bool has_3d = false;                   /* transform uses 3D functions */
+  float mat4[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}; /* row-major, column-vector */
+  bool has_3d = false;                   /* transform uses 3D functions */
   Length tx_ox, tx_oy;                   /* transform-origin, default 50% 50% */
   ObjectFit object_fit = FIT_FILL;
   float aspect_ratio = 0;                /* width/height, 0 = none */

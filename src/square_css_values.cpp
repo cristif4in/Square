@@ -1079,7 +1079,19 @@ void parse_box_shadows(const std::string& v, ComputedStyle* cs, const ResolveCtx
 void parse_transform(const std::string& v, ComputedStyle* cs) {
   /* identity */
   float acc[6] = {1, 0, 0, 1, 0, 0};
-  auto compose = [&](const float m[6]) {
+  float M[4][4] = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
+  bool uses_z = false;
+  auto compose4 = [&](const float m[4][4]) {
+    float R[4][4];
+    for (int r = 0; r < 4; r++)
+      for (int c = 0; c < 4; c++) {
+        float sum = 0;
+        for (int k = 0; k < 4; k++) sum += M[r][k] * m[k][c];
+        R[r][c] = sum;
+      }
+    memcpy(M, R, sizeof(M));
+  };
+  auto compose2 = [&](const float m[6]) {
     float a0 = acc[0] * m[0] + acc[2] * m[1];
     float a1 = acc[1] * m[0] + acc[3] * m[1];
     float a2 = acc[0] * m[2] + acc[2] * m[3];
@@ -1088,6 +1100,14 @@ void parse_transform(const std::string& v, ComputedStyle* cs) {
     float a5 = acc[1] * m[4] + acc[3] * m[5] + acc[5];
     float next[6] = {a0, a1, a2, a3, a4, a5};
     memcpy(acc, next, sizeof(acc));
+  };
+  auto compose_both = [&](const float m[6]) {
+    compose2(m);
+    float m4[4][4] = {{m[0], m[2], 0, m[4]},
+                      {m[1], m[3], 0, m[5]},
+                      {0, 0, 1, 0},
+                      {0, 0, 0, 1}};
+    compose4(m4);
   };
   size_t i = 0, n = v.size();
   while (i < n) {
@@ -1113,42 +1133,114 @@ void parse_transform(const std::string& v, ComputedStyle* cs) {
     auto arg = [&](size_t k, float d) { return k < x.size() ? x[k] : d; };
     if (fn == "translate") {
       float m[6] = {1, 0, 0, 1, arg(0, 0), arg(1, 0)};
-      compose(m);
+      compose_both(m);
     } else if (fn == "translatex") {
       float m[6] = {1, 0, 0, 1, arg(0, 0), 0};
-      compose(m);
+      compose_both(m);
     } else if (fn == "translatey") {
       float m[6] = {1, 0, 0, 1, 0, arg(0, 0)};
       compose(m);
     } else if (fn == "scale") {
       float sx = arg(0, 1);
       float m[6] = {sx, 0, 0, arg(1, sx), 0, 0};
-      compose(m);
+      compose_both(m);
     } else if (fn == "scalex") {
       float m[6] = {arg(0, 1), 0, 0, 1, 0, 0};
-      compose(m);
+      compose_both(m);
     } else if (fn == "scaley") {
       float m[6] = {1, 0, 0, arg(0, 1), 0, 0};
       compose(m);
     } else if (fn == "rotate") {
       float a = arg(0, 0) * 3.14159265f / 180.f;
       float m[6] = {cosf(a), sinf(a), -sinf(a), cosf(a), 0, 0};
-      compose(m);
+      compose_both(m);
     } else if (fn == "matrix") {
       float m[6] = {arg(0, 1), arg(1, 0), arg(2, 0), arg(3, 1), arg(4, 0), arg(5, 0)};
-      compose(m);
+      compose_both(m);
     } else if (fn == "skewx") {
       float t = tanf(arg(0, 0) * 3.14159265f / 180.f);
       float m[6] = {1, 0, t, 1, 0, 0};
-      compose(m);
+      compose_both(m);
     } else if (fn == "skewy") {
       float t = tanf(arg(0, 0) * 3.14159265f / 180.f);
       float m[6] = {1, t, 0, 1, 0, 0};
-      compose(m);
+      compose_both(m);
+    } else if (fn == "translate3d") {
+      uses_z = uses_z || arg(2, 0) != 0;
+      float m4[4][4] = {{1, 0, 0, arg(0, 0)},
+                        {0, 1, 0, arg(1, 0)},
+                        {0, 0, 1, arg(2, 0)},
+                        {0, 0, 0, 1}};
+      compose4(m4);
+    } else if (fn == "translatez") {
+      uses_z = uses_z || arg(0, 0) != 0;
+      float m4[4][4] = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, arg(0, 0)}, {0, 0, 0, 1}};
+      compose4(m4);
+    } else if (fn == "scale3d") {
+      uses_z = true;
+      float m4[4][4] = {{arg(0, 1), 0, 0, 0},
+                        {0, arg(1, 1), 0, 0},
+                        {0, 0, arg(2, 1), 0},
+                        {0, 0, 0, 1}};
+      compose4(m4);
+    } else if (fn == "scalez") {
+      uses_z = true;
+      float m4[4][4] = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, arg(0, 1), 0}, {0, 0, 0, 1}};
+      compose4(m4);
+    } else if (fn == "rotatex") {
+      uses_z = true;
+      float a = arg(0, 0) * 3.14159265f / 180.f;
+      float m4[4][4] = {{1, 0, 0, 0},
+                        {0, cosf(a), -sinf(a), 0},
+                        {0, sinf(a), cosf(a), 0},
+                        {0, 0, 0, 1}};
+      compose4(m4);
+    } else if (fn == "rotatey") {
+      uses_z = true;
+      float a = arg(0, 0) * 3.14159265f / 180.f;
+      float m4[4][4] = {{cosf(a), 0, sinf(a), 0},
+                        {0, 1, 0, 0},
+                        {-sinf(a), 0, cosf(a), 0},
+                        {0, 0, 0, 1}};
+      compose4(m4);
+    } else if (fn == "rotatez") {
+      float a = arg(0, 0) * 3.14159265f / 180.f;
+      float m[6] = {cosf(a), sinf(a), -sinf(a), cosf(a), 0, 0};
+      compose_both(m);
+    } else if (fn == "rotate3d") {
+      uses_z = true;
+      float x = arg(0, 0), y = arg(1, 0), z = arg(2, 0), a = arg(3, 0) * 3.14159265f / 180.f;
+      float len = sqrtf(x * x + y * y + z * z);
+      if (len < 1e-6f) continue;
+      x /= len; y /= len; z /= len;
+      float c = cosf(a), si = sinf(a), ic = 1 - c;
+      float m4[4][4] = {{x * x * ic + c, y * x * ic - z * si, z * x * ic + y * si, 0},
+                        {x * y * ic + z * si, y * y * ic + c, z * y * ic - x * si, 0},
+                        {x * z * ic - y * si, y * z * ic + x * si, z * z * ic + c, 0},
+                        {0, 0, 0, 1}};
+      compose4(m4);
+    } else if (fn == "perspective") {
+      uses_z = true;
+      float d = arg(0, 0);
+      float m4[4][4] = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
+      if (fabsf(d) > 1e-3f) m4[3][2] = -1.f / d;
+      compose4(m4);
+    } else if (fn == "matrix3d") {
+      uses_z = true;
+      /* CSS matrix3d is column-major; M is row-major. It REPLACES the
+       * accumulated matrix per spec. */
+      float m4[4][4];
+      for (int c = 0; c < 4; c++)
+        for (int r = 0; r < 4; r++) m4[r][c] = arg((size_t)(c * 4 + r), c == r ? 1.f : 0.f);
+      compose4(m4);
     }
   }
   bool identity = acc[0] == 1 && acc[1] == 0 && acc[2] == 0 && acc[3] == 1 && acc[4] == 0 && acc[5] == 0;
-  if (!identity) {
+  if (uses_z) {
+    memcpy(cs->mat4, M, sizeof(M));
+    cs->has_3d = true;
+    cs->has_transform = true;
+  } else if (!identity) {
     memcpy(cs->mat, acc, sizeof(acc));
     cs->has_transform = true;
   }
