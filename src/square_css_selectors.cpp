@@ -39,6 +39,11 @@ static bool nth_match(const std::string& arg, int index /*1-based*/) {
   return diff >= 0 && diff % (-step) == 0;
 }
 
+static bool is_form_control(const std::string& tag) {
+  return tag == "input" || tag == "button" || tag == "select" || tag == "textarea" ||
+         tag == "option" || tag == "optgroup" || tag == "fieldset";
+}
+
 static bool pseudo_class_match(const Node* el, const std::string& pc) {
   if (pc == "root") return el->parent && el->parent->type == N_DOCUMENT;
   if (pc == "hover") {
@@ -48,10 +53,17 @@ static bool pseudo_class_match(const Node* el, const std::string& pc) {
     return false;
   }
   if (pc == "focus" || pc == "active" || pc == "focus-visible" ||
-      pc == "focus-within" || pc == "target" || pc == "visited" || pc == "link" ||
-      pc == "checked" || pc == "disabled" || pc == "enabled" || pc == "placeholder-shown" ||
-      pc == "focus-within" || pc == "autofill")
-    return false; /* static render: interactive states never match (link never visited) */
+      pc == "focus-within" || pc == "target" || pc == "visited" ||
+      pc == "placeholder-shown" || pc == "focus-within" || pc == "autofill")
+    return false; /* no focus tracking in static render; link never visited */
+  if (pc == "link") return el->tag == "a" && el->attr("href");
+  if (pc == "disabled") return is_form_control(el->tag) && el->attr("disabled") != nullptr;
+  if (pc == "enabled") return is_form_control(el->tag) && el->attr("disabled") == nullptr;
+  if (pc == "checked") {
+    if (el->tag == "input") return el->attr("checked") != nullptr;
+    if (el->tag == "option") return el->attr("selected") != nullptr;
+    return false;
+  }
   if (pc == "first-child") {
     if (!el->parent) return true;
     for (const Node* c : el->parent->children)
@@ -99,6 +111,29 @@ static bool pseudo_class_match(const Node* el, const std::string& pc) {
       }
     }
     return false;
+  }
+  /* of-type family: index among same-tag element siblings */
+  if (pc == "first-of-type" || pc == "last-of-type" || pc == "only-of-type" ||
+      starts_with(pc, "nth-of-type(") || starts_with(pc, "nth-last-of-type(")) {
+    int fwd = 0, bwd = 0;
+    int idx_fwd = 0, idx_bwd = 0;
+    const auto& ch = el->parent ? el->parent->children : el->children;
+    for (const Node* c : ch) {
+      if (c->type != N_ELEMENT || c->tag != el->tag) continue;
+      fwd++;
+      if (c == el) idx_fwd = fwd;
+    }
+    for (int i = (int)ch.size() - 1; i >= 0; i--) {
+      const Node* c = ch[i];
+      if (c->type != N_ELEMENT || c->tag != el->tag) continue;
+      bwd++;
+      if (c == el) idx_bwd = bwd;
+    }
+    if (pc == "first-of-type") return idx_fwd == 1;
+    if (pc == "last-of-type") return idx_bwd == 1;
+    if (pc == "only-of-type") return fwd == 1;
+    if (starts_with(pc, "nth-of-type(")) return nth_match(pc.substr(12, pc.size() - 13), idx_fwd);
+    return nth_match(pc.substr(17, pc.size() - 18), idx_bwd);
   }
   if (starts_with(pc, "not(")) {
     std::string arg = pc.substr(4, pc.size() - 5);
