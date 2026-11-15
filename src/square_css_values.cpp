@@ -313,6 +313,15 @@ bool parse_length(const std::string& raw, Length* out, const ResolveCtx& rc) {
 /* colors ---------------------------------------------------------------- */
 bool parse_css_color(const std::string& raw, const ResolveCtx& rc, Color* out) {
   std::string s = trim(raw);
+  /* light-dark(a, b): light scheme by default (SQRL_COLOR_SCHEME=dark picks b) */
+  if (lc(s).rfind("light-dark(", 0) == 0 && s.back() == ')') {
+    std::vector<std::string> parts;
+    split_top_commas(s.substr(11, s.size() - 12), &parts);
+    if (parts.size() != 2) return false;
+    const char* scheme = getenv("SQRL_COLOR_SCHEME");
+    int idx = (scheme && lc(scheme).find("dark") != std::string::npos) ? 1 : 0;
+    return parse_css_color(parts[idx], rc, out);
+  }
   if (s == "currentcolor" || s == "currentColor") { *out = rc.current_color; return true; }
   if (s == "transparent") { *out = Color{0, 0, 0, 0}; return true; }
   if (s == "none") { *out = Color{0, 0, 0, 0}; return true; }

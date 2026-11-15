@@ -168,6 +168,7 @@ JSValue js_insert_before(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
   Node* child = unwrap_node(argv[1]);
   Node* ref = argc > 2 && !JS_IsNull(argv[2]) ? unwrap_node(argv[2]) : nullptr;
   if (!parent || !child) return JS_ThrowTypeError(ctx, "bad node");
+  if (child == parent || ref == child) return JS_DupValue(ctx, argv[1]); /* DOM no-op */
   if (child->parent) {
     auto& sibs = child->parent->children;
     sibs.erase(std::remove(sibs.begin(), sibs.end(), child), sibs.end());

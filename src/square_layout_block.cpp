@@ -600,17 +600,27 @@ Box* layout_document(Document* doc, int vw, int vh, ImageCacheView* images) {
   float body_declared = body_w;
   if (bcs->width.unit != L_AUTO && bcs->width.unit != L_NORMAL) {
     body_declared = res_l(bcs->width, body_w, bcs->font_size, lc);
-    if (ml_auto && mr_auto) {
-      ml = (body_w - body_declared) / 2;
-      mr = body_w - body_declared - ml;
-    }
   } else {
     body_declared = body_w - ml - mr;
   }
+  /* max/min-width clamp on the body box (example.com: body{max-width:26em}) */
+  if (bcs->max_w.unit != L_AUTO && bcs->max_w.unit != L_NORMAL)
+    body_declared = std::min(body_declared, res_l(bcs->max_w, body_w, bcs->font_size, lc));
+  if (bcs->min_w.unit != L_AUTO && bcs->min_w.unit != L_NORMAL)
+    body_declared = std::max(body_declared, res_l(bcs->min_w, body_w, bcs->font_size, lc));
   resolve_box_edges(root, bcs, body_declared, lc);
+  float border_w = body_declared + root->pad_l + root->pad_r + root->bor_l + root->bor_r;
+  if (ml_auto && mr_auto && border_w < body_w) {
+    ml = (body_w - border_w) / 2;
+    mr = body_w - border_w - ml;
+  } else if (ml_auto) {
+    ml = std::max(0.f, body_w - border_w - mr);
+  } else if (mr_auto) {
+    mr = std::max(0.f, body_w - border_w - ml);
+  }
   root->x = ml;
   root->y = res_l(bcs->margin[0], body_w, bcs->font_size, lc);
-  root->w = body_declared + root->pad_l + root->pad_r + root->bor_l + root->bor_r;
+  root->w = border_w;
   root->cw = body_declared;
   float ch = layout_element(root, doc->body, lc);
   (void)ch;

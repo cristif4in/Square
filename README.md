@@ -5,6 +5,9 @@
 Square is a from-scratch browser engine written in C++17. It ships as a shared
 library (`libsquare.so` on Linux, `square.dll` on Windows).
 
+## Ai disclaimer
+This project may use the usage of AI in the code but also screenshots and relative stuff to this project.
+
 ## Versioning
 
 Each release adds +11 patch number to the patch section: 1.a.0001 → 1.a.0012 → 1.a.0023 → …
