@@ -111,6 +111,14 @@ Length parse_length_component(const std::string& t) {
   else if (unit == "vh") { L.unit = L_VH; L.val = v; }
   else if (unit == "ch") { L.unit = L_CH; L.val = v * 8; }   /* approx 8px */
   else if (unit == "pt") { L.unit = L_PX; L.val = v * 96.f / 72.f; }
+  else if (unit == "cm") { L.unit = L_PX; L.val = v * 96.f / 2.54f; }
+  else if (unit == "mm") { L.unit = L_PX; L.val = v * 96.f / 25.4f; }
+  else if (unit == "q")  { L.unit = L_PX; L.val = v * 96.f / 101.6f; }
+  else if (unit == "in") { L.unit = L_PX; L.val = v * 96.f; }
+  else if (unit == "pc") { L.unit = L_PX; L.val = v * 16.f; }          /* 1pc = 12pt */
+  else if (unit == "ex") { L.unit = L_EM; L.val = v * 0.5f; }          /* x-height approx */
+  else if (unit == "vmin") { L.unit = L_VMIN; L.val = v; }
+  else if (unit == "vmax") { L.unit = L_VMAX; L.val = v; }
   else if (unit == "fr") { L.unit = L_FR; L.val = v; }
   else if (unit == "deg") { L.unit = L_DEG; L.val = v; }
   else if (unit == "turn") { L.unit = L_DEG; L.val = v * 360; }
@@ -594,6 +602,8 @@ float resolve_length(const Length& L, float pct_basis, float em, float rem, floa
     case L_REM: return L.val * rem;
     case L_VW: return L.val * vw / 100.f;
     case L_VH: return L.val * vh / 100.f;
+    case L_VMIN: return L.val * std::min(vw, vh) / 100.f;
+    case L_VMAX: return L.val * std::max(vw, vh) / 100.f;
     case L_CH: return L.val; /* pre-scaled */
     default: break;
   }
@@ -608,6 +618,8 @@ float resolve_length(const Length& L, float pct_basis, float em, float rem, floa
         case L_REM: sum += t.val * rem * t.mul; break;
         case L_VW: sum += t.val * vw / 100.f * t.mul; break;
         case L_VH: sum += t.val * vh / 100.f * t.mul; break;
+        case L_VMIN: sum += t.val * std::min(vw, vh) / 100.f * t.mul; break;
+        case L_VMAX: sum += t.val * std::max(vw, vh) / 100.f * t.mul; break;
         default: sum += t.val * t.mul; break;
       }
     }
@@ -622,6 +634,8 @@ float resolve_length(const Length& L, float pct_basis, float em, float rem, floa
             case L_REM: s2 += ts[i].val * rem * ts[i].mul; break;
             case L_VW: s2 += ts[i].val * vw / 100.f * ts[i].mul; break;
             case L_VH: s2 += ts[i].val * vh / 100.f * ts[i].mul; break;
+            case L_VMIN: s2 += ts[i].val * std::min(vw, vh) / 100.f * ts[i].mul; break;
+            case L_VMAX: s2 += ts[i].val * std::max(vw, vh) / 100.f * ts[i].mul; break;
             default: s2 += ts[i].val * ts[i].mul; break;
           }
         }
@@ -642,6 +656,8 @@ float resolve_length(const Length& L, float pct_basis, float em, float rem, floa
             case L_REM: s2 += ts[i].val * rem * ts[i].mul; break;
             case L_VW: s2 += ts[i].val * vw / 100.f * ts[i].mul; break;
             case L_VH: s2 += ts[i].val * vh / 100.f * ts[i].mul; break;
+            case L_VMIN: s2 += ts[i].val * std::min(vw, vh) / 100.f * ts[i].mul; break;
+            case L_VMAX: s2 += ts[i].val * std::max(vw, vh) / 100.f * ts[i].mul; break;
             default: s2 += ts[i].val * ts[i].mul; break;
           }
         }

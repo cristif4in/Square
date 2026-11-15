@@ -52,7 +52,7 @@ struct RoundedClip {
 };
 
 /* length / units ------------------------------------------------------ */
-enum LUnit : uint8_t { L_AUTO = 0, L_PX, L_PCT, L_EM, L_REM, L_VW, L_VH, L_CH, L_FR, L_DEG, L_CALC, L_NORMAL, L_CLAMP, L_MM };
+enum LUnit : uint8_t { L_AUTO = 0, L_PX, L_PCT, L_EM, L_REM, L_VW, L_VH, L_CH, L_FR, L_DEG, L_CALC, L_NORMAL, L_CLAMP, L_MM, L_VMIN, L_VMAX };
 struct CalcTerm { float val = 0; uint8_t unit = L_PX; float mul = 1; };
 struct Length {
   LUnit unit = L_AUTO;

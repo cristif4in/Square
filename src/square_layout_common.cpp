@@ -22,6 +22,8 @@ float res_l(const Length& L, float pct_basis, float em, LayoutCtx& lc) {
     case L_REM: return L.val * lc.rem;
     case L_VW: return L.val * lc.vw / 100.f;
     case L_VH: return L.val * lc.vh / 100.f;
+    case L_VMIN: return L.val * std::min(lc.vw, lc.vh) / 100.f;
+    case L_VMAX: return L.val * std::max(lc.vw, lc.vh) / 100.f;
     case L_CH: return L.val;
     default: break;
   }
@@ -36,6 +38,8 @@ float res_l(const Length& L, float pct_basis, float em, LayoutCtx& lc) {
         case L_REM: sum += t.val * lc.rem * t.mul; break;
         case L_VW: sum += t.val * lc.vw / 100.f * t.mul; break;
         case L_VH: sum += t.val * lc.vh / 100.f * t.mul; break;
+        case L_VMIN: sum += t.val * std::min(lc.vw, lc.vh) / 100.f * t.mul; break;
+        case L_VMAX: sum += t.val * std::max(lc.vw, lc.vh) / 100.f * t.mul; break;
         default: sum += t.val * t.mul; break;
       }
     }
@@ -50,6 +54,8 @@ float res_l(const Length& L, float pct_basis, float em, LayoutCtx& lc) {
             case L_REM: s2 += ts[i].val * lc.rem * ts[i].mul; break;
             case L_VW: s2 += ts[i].val * lc.vw / 100.f * ts[i].mul; break;
             case L_VH: s2 += ts[i].val * lc.vh / 100.f * ts[i].mul; break;
+            case L_VMIN: s2 += ts[i].val * std::min(lc.vw, lc.vh) / 100.f * ts[i].mul; break;
+            case L_VMAX: s2 += ts[i].val * std::max(lc.vw, lc.vh) / 100.f * ts[i].mul; break;
             default: s2 += ts[i].val * ts[i].mul; break;
           }
         }
@@ -70,6 +76,8 @@ float res_l(const Length& L, float pct_basis, float em, LayoutCtx& lc) {
             case L_REM: s2 += ts[i].val * lc.rem * ts[i].mul; break;
             case L_VW: s2 += ts[i].val * lc.vw / 100.f * ts[i].mul; break;
             case L_VH: s2 += ts[i].val * lc.vh / 100.f * ts[i].mul; break;
+            case L_VMIN: s2 += ts[i].val * std::min(lc.vw, lc.vh) / 100.f * ts[i].mul; break;
+            case L_VMAX: s2 += ts[i].val * std::max(lc.vw, lc.vh) / 100.f * ts[i].mul; break;
             default: s2 += ts[i].val * ts[i].mul; break;
           }
         }
