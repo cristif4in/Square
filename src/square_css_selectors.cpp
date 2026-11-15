@@ -52,10 +52,15 @@ static bool pseudo_class_match(const Node* el, const std::string& pc) {
       if (a == el) return true;
     return false;
   }
-  if (pc == "focus" || pc == "active" || pc == "focus-visible" ||
-      pc == "focus-within" || pc == "target" || pc == "visited" ||
-      pc == "placeholder-shown" || pc == "focus-within" || pc == "autofill")
-    return false; /* no focus tracking in static render; link never visited */
+  if (pc == "focus") return g_focus_node == el;
+  if (pc == "focus-within") {
+    for (const Node* a = g_focus_node; a; a = a->parent)
+      if (a == el) return true;
+    return false;
+  }
+  if (pc == "active" || pc == "focus-visible" || pc == "target" || pc == "visited" ||
+      pc == "placeholder-shown" || pc == "autofill")
+    return false; /* no press/target tracking; link never visited */
   if (pc == "link") return el->tag == "a" && el->attr("href");
   if (pc == "disabled") return is_form_control(el->tag) && el->attr("disabled") != nullptr;
   if (pc == "enabled") return is_form_control(el->tag) && el->attr("disabled") == nullptr;

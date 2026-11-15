@@ -341,6 +341,7 @@ static void run_with_big_stack(std::function<void()> fn, std::thread& out) {
 #endif
 
 static void page_thread_entry(Instance* inst, std::string url, bool as_html) {
+  g_focus_node = nullptr; /* new document: drop :focus */
   if (as_html) {
     /* build a fake document from html string */
     inst->final_url = url.empty() ? "file:///local.html" : url;
@@ -534,6 +535,7 @@ void square_load_url(square_instance* p, const char* url) {
 
 /* ============================ input / hit testing ============================ */
 namespace sqrl { Node* g_hover_node = nullptr; } /* :hover target (declared in square_internal.h) */
+namespace sqrl { Node* g_focus_node = nullptr; } /* :focus target */
 using sqrl::g_hover_node;
 
 static Node* hit_test_box(Box* b, float x, float y) {
@@ -786,6 +788,68 @@ SQRL_API int square_send_click(square_instance* p, float x, float y, int button)
         if (cur->type == N_ELEMENT) { n = cur; break; }
       }
       if (n) {
+        /* --- focus tracking (:focus / :focus-within) --- */
+        bool focusable = n->tag == "input" || n->tag == "button" || n->tag == "select" ||
+                         n->tag == "textarea" || n->tag == "option" || n->tag == "label" ||
+                         n->attr("tabindex");
+        Node* prev_focus = g_focus_node;
+        g_focus_node = focusable ? n : nullptr;
+        if (g_focus_node != prev_focus) {
+          if (prev_focus) mark_dirty_node(inst, prev_focus);
+          if (g_focus_node) mark_dirty_node(inst, g_focus_node);
+        }
+        /* --- label click forwards to its control (for= or nested) --- */
+        Node* ctrl = n;
+        if (n->tag == "label") {
+          const std::string* forid = n->attr("for");
+          Node* target = nullptr;
+          if (forid && !forid->empty() && inst->doc && inst->doc->body) {
+            std::function<void(Node*)> scan = [&](Node* m) {
+              if (target) return;
+              if (m->type == N_ELEMENT) {
+                const std::string* ida = m->attr("id");
+                if (ida && *ida == *forid) { target = m; return; }
+              }
+              for (Node* k : m->children) scan(k);
+            };
+            scan(inst->doc->body);
+          } else {
+            for (Node* k : n->children)
+              if (k->type == N_ELEMENT && (k->tag == "input" || k->tag == "select" ||
+                                           k->tag == "textarea")) { target = k; break; }
+          }
+          if (target) ctrl = target;
+        }
+        /* --- native checkbox / radio toggle (works without JS listeners) --- */
+        if (ctrl->tag == "input") {
+          const std::string* ta = ctrl->attr("type");
+          std::string t = ta ? *ta : "text";
+          if (t == "checkbox") {
+            if (ctrl->attr("checked"))
+              ctrl->remove_attr("checked");
+            else
+              ctrl->set_attr("checked", "");
+            mark_dirty_node(inst, ctrl);
+          } else if (t == "radio") {
+            const std::string* nm = ctrl->attr("name");
+            if (nm && inst->doc && inst->doc->body) {
+              std::function<void(Node*)> uncheck = [&](Node* m) {
+                if (m->type == N_ELEMENT && m->tag == "input" && m != ctrl) {
+                  const std::string* mt = m->attr("type");
+                  const std::string* mn = m->attr("name");
+                  if (mt && *mt == "radio" && mn && *mn == *nm && m->attr("checked")) {
+                    m->remove_attr("checked");
+                    mark_dirty_node(inst, m);
+                  }
+                }
+                for (Node* k : m->children) uncheck(k);
+              };
+              uncheck(inst->doc->body);
+            }
+            ctrl->set_attr("checked", "");
+            mark_dirty_node(inst, ctrl);
+          }
+        }
         std::lock_guard<std::mutex> lk(inst->js_mtx);
         int64_t id = node_id_for(n);
         if (id) {

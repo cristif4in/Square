@@ -148,6 +148,7 @@ struct Node {
 
 /* hovered element (for :hover matching); owned/set by square_platform */
 extern Node* g_hover_node;
+extern Node* g_focus_node; /* last clicked focusable element (:focus) */
 
 /* ============================ CSS structures ============================ */
 
