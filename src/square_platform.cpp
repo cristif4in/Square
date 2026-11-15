@@ -319,16 +319,106 @@ HttpResult fetch_sync(Instance* inst, const std::string& url, const char* dest) 
   if (url.rfind("file://", 0) == 0) {
     HttpResult r;
     std::string path = url.substr(7);
+    /* drop query / fragment (file URLs can carry neither on disk) */
+    size_t cut = path.find_first_of("?#");
+    if (cut != std::string::npos) path = path.substr(0, cut);
     if (path.size() > 2 && path[0] == '/' && path[2] == ':') path = path.substr(1); /* /C:/ */
+    /* percent-decode (%20 spaces etc.) */
+    {
+      std::string dec;
+      dec.reserve(path.size());
+      for (size_t i = 0; i < path.size(); i++) {
+        if (path[i] == '%' && i + 2 < path.size() && isxdigit((unsigned char)path[i + 1]) &&
+            isxdigit((unsigned char)path[i + 2])) {
+          auto hx = [](char c) { return c <= '9' ? c - '0' : (c | 32) - 'a' + 10; };
+          dec += (char)(hx(path[i + 1]) * 16 + hx(path[i + 2]));
+          i += 2;
+        } else dec += path[i];
+      }
+      path = dec;
+    }
     std::vector<uint8_t> bytes;
     if (read_file_bytes(path, &bytes)) {
       r.ok = true;
       r.status = 200;
       r.body = std::move(bytes);
       r.final_url = url;
-    } else {
-      r.err = "file not found: " + path;
+      return r;
     }
+    /* directory URL: generate a simple HTML listing (like browsers do) */
+    auto stat_is_dir = [](const std::string& p) {
+#ifdef _WIN32
+      struct _stat st;
+      if (_stat(p.c_str(), &st) != 0) return false;
+      return (st.st_mode & _S_IFDIR) != 0;
+#else
+      struct stat st;
+      if (stat(p.c_str(), &st) != 0) return false;
+      return S_ISDIR(st.st_mode);
+#endif
+    };
+    if (!path.empty() && path.back() != '/' && path.back() != '\\') {
+      if (stat_is_dir(path)) path += "/";
+    }
+    if (!path.empty() && (path.back() == '/' || path.back() == '\\')) {
+      std::string dir = path;
+      if (dir.size() == 2 && dir[1] == ':') dir += "."; /* drive root */
+      DIR* d = opendir(dir.c_str());
+      if (d) {
+        struct dirent* ent;
+        std::vector<std::pair<std::string, bool>> entries; /* name, is_dir */
+        while ((ent = readdir(d))) {
+          std::string name = ent->d_name;
+          if (name == "." || name == "..") continue;
+          bool is_dir = stat_is_dir(path + name);
+          entries.push_back({name, is_dir});
+        }
+        closedir(d);
+        std::sort(entries.begin(), entries.end(), [](auto& a, auto& b) {
+          if (a.second != b.second) return a.second; /* dirs first */
+          return plat_lc(a.first) < plat_lc(b.first);
+        });
+        auto esc = [](const std::string& s) {
+          std::string o;
+          for (char c : s) {
+            if (c == '&') o += "&amp;";
+            else if (c == '<') o += "&lt;";
+            else if (c == '>') o += "&gt;";
+            else if (c == '"') o += "&quot;";
+            else o += c;
+          }
+          return o;
+        };
+        std::string title = esc(path);
+        std::string html = "<!doctype html><html><head><title>Index of " + title +
+                           "</title></head><body><h1>Index of " + title + "</h1><hr><ul>";
+        /* parent directory link when not the filesystem root */
+        std::string p = path;
+        if (p.size() > 3) {
+          while (p.size() > 1 && p.back() != '/' && p.back() != '\\') p.pop_back();
+          if (p.size() > 1 && p.back() == '/') p.pop_back();
+          if (p.size() > 3) {
+            while (p.size() > 1 && p.back() != '/' && p.back() != '\\') p.pop_back();
+            std::string purl = "file:///" + p;
+            html += "<li><a href=\"" + esc(purl) + "\">../</a></li>";
+          }
+        }
+        for (auto& e : entries) {
+          std::string link = e.first;
+          for (auto& ch : link)
+            if (ch == '"') ch = '\'';
+          html += "<li><a href=\"" + esc(link) + "\">" + esc(e.first) +
+                  (e.second ? "/" : "") + "</a></li>";
+        }
+        html += "</ul><hr></body></html>";
+        r.ok = true;
+        r.status = 200;
+        r.body.assign(html.begin(), html.end());
+        r.final_url = url;
+        return r;
+      }
+    }
+    r.err = "file not found: " + path;
     return r;
   }
   if (url.rfind("data:", 0) == 0) {
