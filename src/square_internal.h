@@ -323,6 +323,7 @@ struct ComputedStyle {
   Overflow overflow_x = O_VISIBLE, overflow_y = O_VISIBLE;
   float opacity = 1;
   std::vector<Shadow> shadows;
+  std::vector<Shadow> text_shadows;
   bool has_transform = false;
   float mat[6] = {1, 0, 0, 1, 0, 0};     /* a b c d e f */
   Length tx_ox, tx_oy;                   /* transform-origin, default 50% 50% */

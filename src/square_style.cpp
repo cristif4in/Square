@@ -602,6 +602,13 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     parse_box_shadows(substitute_vars(v, rc), cs, rc);
     return true;
   }
+  if (prop == "text-shadow") {
+    parse_box_shadows(substitute_vars(v, rc), cs, rc); /* reuse: fills text_shadows */
+    auto& src = cs->shadows;
+    cs->text_shadows.insert(cs->text_shadows.end(), src.begin(), src.end());
+    src.clear();
+    return true;
+  }
   if (prop == "transform") {
     if (lc(trim(v)) == "none") { cs->has_transform = false; return true; }
     parse_transform(substitute_vars(v, rc), cs);
@@ -835,7 +842,7 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     "mix-blend-mode", "isolation", "contain", "all", "grid-area", "grid-auto-flow", "grid-auto-rows",
     "grid-auto-columns", "grid-template-areas", "place-items", "place-content", "place-self",
     "column-count", "column-gap", "column-rule", "columns", "mask", "mask-image", "clip-path",
-    "text-wrap", "text-indent", "text-shadow", "caret-color", "accent-color", "color-scheme",
+    "text-wrap", "text-indent", "caret-color", "accent-color", "color-scheme",
     "forced-color-adjust", "appearance", "-webkit-appearance", "-webkit-box-orient",
     "-webkit-line-clamp", "-webkit-box-pack", "-webkit-align-items", "-webkit-flex-direction",
     "zoom", "vector-effect", nullptr

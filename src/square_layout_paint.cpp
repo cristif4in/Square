@@ -168,6 +168,27 @@ static void paint_frags(Box* container, PaintCtx& ctx) {
               c1 == f.run.text.size())
             run_col = f.node->sel_style->color;
         }
+        /* text shadows (blur approximated by multi-offset draws) */
+        ComputedStyle* tcs = f.node ? f.node->cs : nullptr;
+        if (tcs && !tcs->text_shadows.empty()) {
+          for (const Shadow& sh : tcs->text_shadows) {
+            Color scol = sh.color;
+            if (scol.a == 0) continue;
+            float steps = sh.blur > 0 ? 4 : 1;
+            float spread = sh.blur / 3.f;
+            scol.a = (uint8_t)(scol.a * (sh.blur > 0 ? 0.5f : 1.f));
+            for (int i = 0; i < (int)steps; i++) {
+              float ox = sh.dx, oy = sh.dy;
+              if (i > 0) {
+                static const float dirs[3][2] = {{1, 0}, {-1, 0}, {0, 1}};
+                ox += dirs[i - 1][0] * spread;
+                oy += (i == 3 ? 1.f : dirs[i - 1][1]) * spread;
+              }
+              gfx_draw_glyphs(s, f.run.font, f.run.x + ox, f.run.y + oy, glyphs, scol,
+                              ctx.alpha * f.run.alpha, &ctx.clip);
+            }
+          }
+        }
         gfx_draw_glyphs(s, f.run.font, f.run.x, f.run.y, glyphs, run_col,
                         ctx.alpha * f.run.alpha, &ctx.clip);
         /* decorations */
