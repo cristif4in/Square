@@ -97,15 +97,41 @@ static void push_text_items(const std::string& data, const ComputedStyle* cs, No
   }
 }
 
+/* resolve content(): strings, attr(), counter(), counters() */
+static std::string resolve_pseudo_content(const ComputedStyle* pcs, Node* el, LayoutCtx& lc) {
+  std::string out = pcs->content;
+  if (pcs->content_kind == 1 && el) {
+    const std::string* v = el->attr(pcs->content_name.c_str());
+    if (v) out = *v;
+  } else if (pcs->content_kind >= 2) {
+    auto it = lc.counters.find(pcs->content_name);
+    float val = it != lc.counters.end() ? it->second : 0.f;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d", (int)val);
+    out = buf;
+    if (pcs->content_kind == 3) out = pcs->content_sep; /* counters() list unsupported: separator */
+  }
+  return out;
+}
+
+/* apply counter-reset/increment for an element (document order) */
+static void process_counters(Node* el, LayoutCtx& lc) {
+  if (!el || el->type != N_ELEMENT || !el->cs) return;
+  for (auto& r : el->cs->counter_reset) lc.counters[r.first] = r.second;
+  for (auto& inc : el->cs->counter_increment) lc.counters[inc] += 1.f;
+}
+
 static void flatten_element(Node* el, const ComputedStyle* cs, std::vector<InlineItem>* items,
                             LayoutCtx& lc, bool pre) {
+  process_counters(el, lc);
   bool prehere = pre || (cs && (cs->white_space == WS_PRE || cs->white_space == WS_PRE_WRAP ||
                                 cs->white_space == WS_PRE_LINE));
   if (el->pseudo[0] && el->pseudo[0]->content_set) {
     InlineItem it;
     it.kind = InlineItem::I_TEXT;
     it.node = el;
-    it.text = transform_text(el->pseudo[0]->content, el->pseudo[0]->text_transform);
+    it.text = transform_text(resolve_pseudo_content(el->pseudo[0], el, lc),
+                             el->pseudo[0]->text_transform);
     measure_text_item(&it, el->pseudo[0], lc);
     items->push_back(it);
   }
@@ -154,7 +180,7 @@ static void flatten_element(Node* el, const ComputedStyle* cs, std::vector<Inlin
     InlineItem it;
     it.kind = InlineItem::I_TEXT;
     it.node = el;
-    it.text = transform_text(el->pseudo[1]->content, el->pseudo[1]->text_transform);
+    it.text = transform_text(resolve_pseudo_content(el->pseudo[1], el, lc), el->pseudo[1]->text_transform);
     measure_text_item(&it, el->pseudo[1], lc);
     items->push_back(it);
   }

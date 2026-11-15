@@ -375,6 +375,13 @@ struct ComputedStyle {
   float backdrop_blur_px = 0;
   std::string content;                   /* pseudo-elements */
   bool content_set = false;
+  /* content(): 0 string, 1 attr(name), 2 counter(name[, style]), 3 counters(name, sep) */
+  int content_kind = 0;
+  std::string content_name;              /* attr name / counter name */
+  std::string content_sep;               /* counters separator */
+  /* counters */
+  std::vector<std::pair<std::string, float>> counter_reset;
+  std::vector<std::string> counter_increment;
   /* animation (subset: name/duration/delay/timing/iterations) */
   std::string anim_name;
   std::string anim_timing = "linear";
@@ -668,6 +675,8 @@ struct LayoutCtx {
   ImageCacheView* images = nullptr;
   int warned = 0;
   Box* root_box = nullptr;
+  /* CSS counters (document-order state during flattening) */
+  std::unordered_map<std::string, float> counters;
 };
 
 /* full layout pass: returns root box (caller frees via free_box_tree) */

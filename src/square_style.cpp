@@ -711,6 +711,43 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
       cs->content_set = true;
       return true;
     }
+    std::string ls2 = lc(s);
+    if (ls2.rfind("attr(", 0) == 0 && ls2.back() == ')') {
+      cs->content_kind = 1;
+      cs->content_name = trim(s.substr(5, s.size() - 6));
+      cs->content_set = true;
+      return true;
+    }
+    if (ls2.rfind("counters(", 0) == 0 && ls2.back() == ')') {
+      std::vector<std::string> parts;
+      {
+        std::string inner = s.substr(9, s.size() - 10);
+        int pd = 0;
+        std::string cur;
+        for (char c : inner) {
+          if (c == '(') pd++;
+          if (c == ')') pd--;
+          if (c == ',' && pd == 0) { parts.push_back(trim(cur)); cur.clear(); continue; }
+          cur += c;
+        }
+        if (!trim(cur).empty()) parts.push_back(trim(cur));
+      }
+      if (!parts.empty()) {
+        cs->content_kind = 3;
+        cs->content_name = trim(parts[0], ""'");
+        cs->content_sep = parts.size() > 1 ? trim(parts[1], "\"'") : "";
+        cs->content_set = true;
+      }
+      return true;
+    }
+    if (ls2.rfind("counter(", 0) == 0 && ls2.back() == ')') {
+      std::string inner = s.substr(8, s.size() - 9);
+      size_t cm = inner.find(',');
+      cs->content_kind = 2;
+      cs->content_name = trim(cm == std::string::npos ? inner : inner.substr(0, cm), "\"'");
+      cs->content_set = true;
+      return true;
+    }
     if (s == "\"\"" || s == "''") { cs->content = ""; cs->content_set = true; return true; }
     return true;
   }
@@ -829,6 +866,28 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
       return true;
     }
     return true; /* animation-direction / fill-mode / play-state: consumed */
+  }
+  if (prop == "counter-reset") {
+    std::vector<std::string> toks;
+    split_values(lc(trim(substitute_vars(v, rc))), &toks);
+    cs->counter_reset.clear();
+    for (size_t qi = 0; qi < toks.size(); qi++) {
+      float v2 = 0;
+      if (qi + 1 < toks.size() && (isdigit((unsigned char)toks[qi + 1][0]) || toks[qi + 1][0] == '-')) {
+        v2 = (float)atof(toks[qi + 1].c_str());
+        qi++;
+      }
+      cs->counter_reset.push_back({toks[qi], v2});
+    }
+    return true;
+  }
+  if (prop == "counter-increment") {
+    std::vector<std::string> toks;
+    split_values(lc(trim(substitute_vars(v, rc))), &toks);
+    cs->counter_increment.clear();
+    for (auto& t : toks)
+      if (!t.empty() && !(isdigit((unsigned char)t[0]) || t[0] == '-')) cs->counter_increment.push_back(t);
+    return true;
   }
   if (prop == "list-style-type") {
     std::string t = lc(trim(v));
@@ -1021,7 +1080,7 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     "transition-delay", "cursor", "will-change", "pointer-events", "user-select", "touch-action",
     "outline", "outline-width", "outline-style", "outline-color", "outline-offset", "resize",
     "scroll-behavior", "scroll-snap-type", "scroll-margin", "scroll-padding", "visibility",
-    "unicode-bidi", "direction", "quotes", "counter-reset", "counter-increment", "tab-size",
+    "unicode-bidi", "direction", "quotes", "tab-size",
     "text-overflow", "word-break", "overflow-wrap", "word-wrap", "hyphens", "text-justify",
     "font-variant", "font-feature-settings", "font-kerning", "font-stretch", "font-display",
     "src", "unicode-range", "text-rendering", "-webkit-font-smoothing", "-moz-osx-font-smoothing",
@@ -1064,6 +1123,7 @@ struct UaSheet {
       "ul,ol{display:block;margin:1em 0;padding-left:40px}"
       "ol{list-style-type:decimal}"
       "li{display:list-item}"
+      "li{counter-increment:list-item}"
       "dd{margin-left:40px}"
       "b,strong{font-weight:700}"
       "i,em,cite,var{font-style:italic}"
