@@ -397,6 +397,13 @@ struct ComputedStyle {
   uint8_t trans_props = 0;               /* bit1 opacity, bit2 color, bit4 bg-color, bit8 transform */
   float trans_dur = 0;                   /* seconds */
   std::string trans_timing = "ease";
+  /* full transition definitions: one per transition-property entry */
+  struct TransDef {
+    std::string prop;                    /* property name or "all" */
+    float dur = 0, delay = 0;            /* seconds */
+    std::string timing = "ease";
+  };
+  std::vector<TransDef> trans_list;
   /* resolution context */
   bool pseudo_before = false, pseudo_after = false;
 };
