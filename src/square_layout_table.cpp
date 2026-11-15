@@ -91,6 +91,7 @@ static void collect_table_rows(Node* el, ComputedStyle* table_cs, Box* b,
   for (Node* c : el->children) {
     if (c->type == N_TEXT) continue;
     if (c->type != N_ELEMENT || !c->cs) continue;
+    if (c->tag == "caption") continue; /* handled separately in layout_table_content */
     ComputedStyle* ccs = c->cs;
     if (node_invisible(ccs)) continue;
     if (ccs->position == P_ABSOLUTE || ccs->position == P_FIXED) continue;
