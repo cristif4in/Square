@@ -71,7 +71,11 @@ static void ui_navigate(const std::string& url_in) {
       _fullpath(full, url.c_str(), _MAX_PATH);
       url = std::string("file:///") + full;
     } else {
-      url = "https://" + url;
+      /* localhost / 127.x dev servers speak plain http */
+      if (url.rfind("localhost", 0) == 0 || url.rfind("127.", 0) == 0 || url.rfind("::1", 0) == 0)
+        url = "http://" + url;
+      else
+        url = "https://" + url;
     }
   }
   square_load_url(g_ui.inst, url.c_str());

@@ -114,7 +114,11 @@ int main(int argc, char** argv) {
       }
 #endif
     } else {
-      url = "https://" + url;
+      /* localhost / 127.x dev servers speak plain http */
+      if (url.rfind("localhost", 0) == 0 || url.rfind("127.", 0) == 0 || url.rfind("::1", 0) == 0)
+        url = "http://" + url;
+      else
+        url = "https://" + url;
     }
   }
 

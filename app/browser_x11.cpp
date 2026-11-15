@@ -139,11 +139,12 @@ static void ui_navigate(BrowserUI& ui, std::string url) {
         url = std::string("file://") + full;
         free(full);
       }
-    } else if (!url.empty() && (url.rfind("localhost", 0) == 0 || url.rfind("127.", 0) == 0 ||
-                                url.find('.') != std::string::npos)) {
-      url = "https://" + url;
     } else {
-      url = "https://" + url;
+      /* localhost / 127.x dev servers speak plain http */
+      if (url.rfind("localhost", 0) == 0 || url.rfind("127.", 0) == 0 || url.rfind("::1", 0) == 0)
+        url = "http://" + url;
+      else
+        url = "https://" + url;
     }
   }
   ui.address = url;

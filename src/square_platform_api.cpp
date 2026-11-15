@@ -516,7 +516,8 @@ static std::string normalize_input_url(const std::string& raw) {
   for (char c : host_lower)
     if (c != '.' && (c < '0' || c > '9')) { digits_only = false; break; }
   if (digits_only || host_lower == "localhost" ||
-      host_lower.rfind("localhost:", 0) == 0)
+      host_lower.rfind("localhost:", 0) == 0 ||
+      lower.rfind("::1", 0) == 0 || lower.rfind("[::1]", 0) == 0)
     return "http://" + u;
   if (host_lower.rfind("www.", 0) == 0) return "https://" + u;
   return "https://www." + u;
