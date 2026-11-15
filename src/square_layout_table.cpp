@@ -195,9 +195,29 @@ float layout_table_content(Box* b, Node* el, LayoutCtx& lc) {
 
   std::vector<TableRow> rows;
   collect_table_rows(el, cs, b, &rows);
+
+  /* caption: lay out <caption> children as blocks above the rows */
+  float cap_h = 0;
+  for (Node* c : el->children) {
+    if (c->type != N_ELEMENT || c->tag != "caption" || !c->cs) continue;
+    if (node_invisible(c->cs)) continue;
+    if (c->cs->position == P_ABSOLUTE || c->cs->position == P_FIXED) continue;
+    Box* cb = new_box(c, b);
+    cb->cs = c->cs;
+    resolve_box_edges(cb, c->cs, avail_w, lc);
+    cb->w = avail_w;
+    cb->cw = std::max(0.f, avail_w - cb->pad_l - cb->pad_r - cb->bor_l - cb->bor_r);
+    cb->x = b->x + b->pad_l + b->bor_l;
+    cb->y = b->y + b->pad_t + b->bor_t + cap_h;
+    float ch = layout_element(cb, c, lc);
+    cb->h = ch + cb->pad_t + cb->pad_b + cb->bor_t + cb->bor_b;
+    b->kids.push_back(cb);
+    cap_h += cb->h;
+  }
+
   if (rows.empty()) {
     b->last_line_baseline = b->y;
-    return 0;
+    return cap_h;
   }
 
   int ncols = 1;
@@ -405,7 +425,7 @@ float layout_table_content(Box* b, Node* el, LayoutCtx& lc) {
   for (int i = 0; i < ncols; i++) table_content_w += colw[i];
   for (size_t r = 0; r < rows.size(); r++) {
     rows[r].box->x = b->x + b->pad_l + b->bor_l;
-    rows[r].box->y = b->y + b->pad_t + b->bor_t + y;
+    rows[r].box->y = b->y + b->pad_t + b->bor_t + cap_h + y;
     rows[r].box->w = table_content_w;
     rows[r].box->h = rowh[r];
     for (TableCell& cell : rows[r].cells) {
@@ -463,7 +483,7 @@ float layout_table_content(Box* b, Node* el, LayoutCtx& lc) {
     }
   }
 
-  float content_h = y;
+  float content_h = cap_h + y;
   b->last_line_baseline = b->y + b->pad_t + b->bor_t + content_h;
   return content_h;
 }
