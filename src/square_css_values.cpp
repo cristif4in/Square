@@ -322,6 +322,55 @@ bool parse_css_color(const std::string& raw, const ResolveCtx& rc, Color* out) {
     int idx = (scheme && lc(scheme).find("dark") != std::string::npos) ? 1 : 0;
     return parse_css_color(parts[idx], rc, out);
   }
+  /* color-mix(in srgb, <color> [pct], <color> [pct]): srgb, alpha-weighted mix */
+  if (lc(s).rfind("color-mix(", 0) == 0 && s.back() == ')') {
+    std::vector<std::string> args;
+    split_top_commas(s.substr(10, s.size() - 11), &args);
+    struct MixPart {
+      std::string col;
+      float pct = -1;
+    };
+    std::vector<MixPart> parts;
+    for (auto& a : args) {
+      std::string t = trim(a);
+      if (lc(t).rfind("in ", 0) == 0) continue; /* interpolation method: treat as srgb */
+      if (t.empty()) continue;
+      MixPart mp;
+      mp.col = t;
+      /* trailing "<pct>%" token after the last space (hex/named colors have none) */
+      size_t sp = t.rfind(' ');
+      if (sp != std::string::npos && t.back() == '%') {
+        std::string pt = trim(t.substr(sp + 1));
+        if (pt.size() > 1 && pt.back() == '%') {
+          mp.pct = (float)atof(pt.c_str());
+          mp.col = trim(t.substr(0, sp));
+        }
+      }
+      parts.push_back(mp);
+    }
+    if (parts.size() != 2) return false;
+    Color c1, c2;
+    if (!parse_css_color(parts[0].col, rc, &c1)) return false;
+    if (!parse_css_color(parts[1].col, rc, &c2)) return false;
+    float w1 = parts[0].pct >= 0 ? parts[0].pct : 50.f;
+    float w2 = parts[1].pct >= 0 ? parts[1].pct : 50.f;
+    if (w1 <= 0 && w2 <= 0) { *out = Color{0, 0, 0, 0}; return true; }
+    float sum = w1 + w2;
+    if (sum <= 0) sum = 1;
+    w1 = w1 / sum;
+    w2 = w2 / sum;
+    /* premultiplied: alpha-weighted channel mix, alpha = weighted sum */
+    float a1 = c1.a / 255.f * w1, a2 = c2.a / 255.f * w2;
+    float alpha = a1 + a2;
+    if (alpha <= 0) { *out = Color{0, 0, 0, 0}; return true; }
+    auto mixc = [&](uint8_t v1, uint8_t v2) -> uint8_t {
+      float v = (v1 * a1 + v2 * a2) / alpha;
+      return (uint8_t)std::min(255.f, std::max(0.f, v + 0.5f));
+    };
+    *out = Color{(uint8_t)std::min(255.f, alpha * 255.f + 0.5f),
+                 mixc(c1.r, c2.r), mixc(c1.g, c2.g), mixc(c1.b, c2.b)};
+    return true;
+  }
   if (s == "currentcolor" || s == "currentColor") { *out = rc.current_color; return true; }
   if (s == "transparent") { *out = Color{0, 0, 0, 0}; return true; }
   if (s == "none") { *out = Color{0, 0, 0, 0}; return true; }
