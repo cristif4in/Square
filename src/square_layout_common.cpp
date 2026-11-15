@@ -257,6 +257,11 @@ float measure_max_content_width(Node* el, LayoutCtx& lc) {
   bool has_inline = false;
   for (Node* c : el->children) {
     if (c->type == N_TEXT) {
+      /* whitespace-only text between block children is not inline content */
+      bool only_ws = true;
+      for (char ch : c->data)
+        if (!isspace((unsigned char)ch)) { only_ws = false; break; }
+      if (only_ws) continue;
       if (!c->data.empty()) has_inline = true;
       inline_total += measure_text_width(c, cs, lc);
       continue;
@@ -292,7 +297,7 @@ float measure_max_content_width(Node* el, LayoutCtx& lc) {
     base += (cs->border_style[3] ? res_l(cs->border_width[3], 0, cs->font_size, lc) : 0) +
             (cs->border_style[1] ? res_l(cs->border_width[1], 0, cs->font_size, lc) : 0);
   }
-  if (getenv("SQRL_DBG_MEASURE") && el->tag == "a")
+  if (getenv("SQRL_DBG_MEASURE") && (el->tag == "a" || el->tag == "div"))
     fprintf(stderr, "[measure] a base=%.1f inline=%.1f maxchild=%.1f pads=%.1f\n", base,
             inline_total, max_child,
             res_l(cs->padding[3], 0, cs->font_size, lc) + res_l(cs->padding[1], 0, cs->font_size, lc));
