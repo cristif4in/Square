@@ -18,9 +18,15 @@
 #include "flame_ic.c"
 #include "flame_rt.c"
 
-/* flame_rt.c — runtime state, tiering policy, executable memory  (phase 4) */
-/* emitter_x64.c / emitter_arm64.c — machine emitters             (phase 5/6) */
-/* flame_baseline.c — baseline tier                               (phase 5) */
-/* flame_opt.c — optimizing tier, OSR + deopt                     (phase 7/8) */
+/* machine emitter: one backend per architecture */
+#if defined(__aarch64__)
+#include "emitter_arm64.c"
+#else
+#include "emitter_x64.c"
+#endif
+
+#include "flame_baseline.c"
+
+/* flame_opt.c — optimizing tier, OSR + deopt (phase 7/8) */
 
 #endif /* CONFIG_FLAME */

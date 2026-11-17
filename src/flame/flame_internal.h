@@ -97,6 +97,7 @@ typedef struct FlameProfile {
     uint32_t entries;     /* interpreter entries since profiling started */
     struct FlameICSite *ics; /* inline-cache sites (phase 3) */
     int ic_count, ic_cap;
+    uint8_t no_compile;      /* baseline tier refused this function */
 } FlameProfile;
 
 /* Inline-cache site record. Cached own-property reads are self-validating:
@@ -194,6 +195,15 @@ struct FlameExecBlock *flame_rt_new_block(struct JSRuntime *rt, size_t size);
 void flame_rt_register_func(struct JSRuntime *rt, struct JSFunctionBytecode *b,
                             void *code, size_t code_size, uint8_t tier);
 void flame_set_stats_rt(struct JSRuntime *rt);
+
+/* Baseline tier (flame_baseline.c). */
+int flame_should_enter_jit(struct JSContext *ctx, struct JSObject *p,
+                           struct JSFunctionBytecode *b, int flags);
+JSValue flame_baseline_call(struct JSContext *caller_ctx,
+                            JSValueConst func_obj, JSValueConst this_obj,
+                            int argc, JSValue *argv);
+void flame_baseline_maybe_compile(struct JSContext *ctx,
+                                  struct JSFunctionBytecode *b);
 
 /* ------------------------------------------------------------------ */
 /* Hook entry points (called from quickjs.c, defined in Flame sources) */

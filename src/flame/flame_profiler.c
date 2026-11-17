@@ -192,8 +192,9 @@ void flame_hook_function_entry(JSContext *ctx, JSObject *p,
         return;
     }
     prof->entries++;
-    /* Tier 1 -> 3 trigger lands here in the optimizing-JIT phase. */
-    (void)p;
+    /* Tier 1 -> 2: enough entries to justify native code. */
+    if (prof->entries == FLAME_HOT_FUNC_THRESHOLD)
+        flame_baseline_maybe_compile(ctx, b);
 }
 
 void flame_hook_loop_backedge(JSFunctionBytecode *b, uint32_t pc_off)
@@ -213,10 +214,11 @@ void flame_hook_loop_backedge(JSFunctionBytecode *b, uint32_t pc_off)
     if (!loop)
         return;
     loop->count++;
-    /* Tier 1 -> 2 trigger: loop went hot; the baseline JIT phase acts on it. */
-    if (loop->count == FLAME_HOT_LOOP_THRESHOLD)
+    if (loop->count == FLAME_HOT_LOOP_THRESHOLD) {
         flame_log(FLAME_LOG_TIER, "hot loop @ bc:%u (baseline candidate)",
                   pc_off);
+        flame_baseline_maybe_compile(ctx, b);
+    }
 }
 
 void flame_hook_call_site(JSFunctionBytecode *b, uint32_t pc_off,

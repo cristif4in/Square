@@ -16251,6 +16251,15 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     }
     b = p->u.func.function_bytecode;
 
+#if CONFIG_FLAME
+    /* Flame: hot functions run compiled baseline code instead of the
+     * interpreter; the compiled code is semantically complete, so this
+     * never changes results. */
+    if (flame_should_enter_jit(caller_ctx, p, b, flags))
+        return flame_baseline_call(caller_ctx, func_obj, this_obj,
+                                   argc, argv);
+#endif
+
     if (unlikely(argc < b->arg_count || (flags & JS_CALL_FLAG_COPY_ARGV))) {
         arg_allocated_size = b->arg_count;
     } else {
