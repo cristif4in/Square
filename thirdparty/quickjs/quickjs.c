@@ -47,6 +47,10 @@
 #include "libunicode.h"
 #include "dtoa.h"
 
+/* Flame JIT (Square). Sources live in src/flame/ and are compiled into this
+ * translation unit; see src/flame/flame_all.h for the rationale. */
+#include "../../src/flame/flame_bridge.h"
+
 #define OPTIMIZE         1
 #define SHORT_OPCODES    1
 #if defined(EMSCRIPTEN)
@@ -1685,6 +1689,8 @@ static const JSMallocFunctions def_malloc_funcs = {
 
 JSRuntime *JS_NewRuntime(void)
 {
+    /* Flame: parse FLAME_DEBUG / SQRL_NO_JIT once, on first runtime. */
+    flame_global_init();
     return JS_NewRuntime2(&def_malloc_funcs, NULL);
 }
 
@@ -54692,3 +54698,6 @@ void JS_AddIntrinsicWeakRef(JSContext *ctx)
                                countof(js_finrec_proto_funcs));
     JS_NewGlobalCConstructor(ctx, "FinalizationRegistry", js_finrec_constructor, 1, ctx->class_proto[JS_CLASS_FINALIZATION_REGISTRY]);
 }
+
+/* Flame JIT sources (Square) — compiled into this TU; see flame_all.h */
+#include "../../src/flame/flame_all.h"
