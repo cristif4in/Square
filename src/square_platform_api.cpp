@@ -312,6 +312,7 @@ void square_destroy(square_instance* p) {
   if (!inst) return;
   inst->cancel = true;
   if (inst->page_thread.joinable()) inst->page_thread.join();
+  style_reset_global_state();
   /* free JS values first, then context, then runtime */
   if (inst->jctx) {
     for (auto& t : inst->timers) JS_FreeValue(inst->jctx, t.fn);

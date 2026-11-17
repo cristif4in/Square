@@ -1812,6 +1812,17 @@ struct TransVal {
 static std::unordered_map<Node*, std::map<std::string, TransVal>> g_transitions;
 
 void transitions_reset() { g_transitions.clear(); }
+
+/* drop every global cache that holds pointers into a document being torn
+ * down, so a new document can't inherit stale rule matches or transitions */
+void style_reset_global_state() {
+  g_rule_index.built = false;
+  g_rule_index.source = nullptr;
+  g_rule_index.by_tag.clear();
+  g_rule_index.universal.clear();
+  transitions_reset();
+  g_starting_until = -1;
+}
 bool css_has_transitions() { return g_any_transitions; }
 
 static Color transition_lerp_color(const Color& a, const Color& b, float t) {

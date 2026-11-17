@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <thread>
 
 #define TOOLBAR_H 68
 #define TAB_STRIP_H 30
@@ -306,7 +307,9 @@ static void tab_new(BrowserUI& ui) {
 
 static void tab_close(BrowserUI& ui, size_t i) {
   if (i >= ui.tabs.size()) return;
-  square_destroy(ui.tabs[i].inst);
+  square_instance* dead = ui.tabs[i].inst;
+  /* tear the engine down off the UI thread so the window stays responsive */
+  std::thread([dead]() { square_destroy(dead); }).detach();
   ui.tabs.erase(ui.tabs.begin() + (long)i);
   if (ui.tabs.empty()) exit(0); /* closing the last tab closes the window */
   if (ui.active >= ui.tabs.size()) ui.active = ui.tabs.size() - 1;

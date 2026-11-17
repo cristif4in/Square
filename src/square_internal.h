@@ -785,6 +785,7 @@ void style_reanimate(Document* doc, int vw, int vh);
 void style_set_scroll_anim_ctx(int scroll_y, int viewport_h, int page_h);
 /* CSS transitions (square_style.cpp) */
 void transitions_reset();
+void style_reset_global_state();
 bool css_has_transitions();
 bool css_starting_active();
 /* scrollbar geometry shared by the painter and the drag API: returns the

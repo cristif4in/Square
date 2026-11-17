@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <thread>
 
 #ifndef GET_WHEEL_DELTA_WPARAM
 #  define GET_WHEEL_DELTA_WPARAM(w) ((short)HIWORD(w))
@@ -158,7 +159,9 @@ static void tab_new() {
 
 static void tab_close(size_t i) {
   if (i >= g_ui.tabs.size()) return;
-  square_destroy(g_ui.tabs[i].inst);
+  square_instance* dead = g_ui.tabs[i].inst;
+  /* tear the engine down off the UI thread so the window stays responsive */
+  std::thread([dead]() { square_destroy(dead); }).detach();
   g_ui.tabs.erase(g_ui.tabs.begin() + (long)i);
   if (g_ui.tabs.empty()) {
     DestroyWindow(g_ui.hwnd); /* closing the last tab closes the window */
