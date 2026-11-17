@@ -15,6 +15,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* QuickJS internal structs (defined later in quickjs.c; this header is
+ * included before them). */
+struct JSRuntime;
+struct JSContext;
+struct JSObject;
+struct JSFunctionBytecode;
+struct JSShape;
+struct FlameProfile;
+
 /* ------------------------------------------------------------------ */
 /* Debug logging                                                       */
 /* ------------------------------------------------------------------ */
@@ -86,7 +95,44 @@ typedef struct FlameProfile {
     FlameCallSite *calls; int call_count, call_cap;
     FlameLoop *loops;     int loop_count, loop_cap;
     uint32_t entries;     /* interpreter entries since profiling started */
+    struct FlameICSite *ics; /* inline-cache sites (phase 3) */
+    int ic_count, ic_cap;
 } FlameProfile;
+
+/* Inline-cache site record. Cached own-property reads are self-validating:
+ * a hit requires the object's shape pointer to match AND the atom at the
+ * cached shape slot to still equal the site's constant atom, so shape
+ * mutation or deletion can never serve a stale value. The shape reference
+ * is owned (js_dup_shape) and released on invalidation/free. */
+typedef struct FlameICSite {
+    uint32_t pc_off;      /* bytecode offset of the access site */
+    uint8_t  kind;        /* FLAME_IC_FIELD / FLAME_IC_ELEM */
+    uint8_t  cached;      /* a shape/prop_idx cache entry is live */
+    struct JSShape *shape;/* owned reference (field ICs only) */
+    uint32_t prop_idx;    /* index into shape->prop[] (field ICs only) */
+    JSAtom    atom;       /* site's constant atom (field ICs only) */
+    uint8_t  elem_kind;   /* FLAME_KIND feedback for element loads */
+    uint32_t hits, misses;
+} FlameICSite;
+
+#define FLAME_IC_FIELD 0
+#define FLAME_IC_ELEM  1
+
+/* IC fast paths (defined in flame_ic.c). Return 1 + fill *out on a cache
+ * hit; return 0 (miss) and the caller uses the normal property path, then
+ * invokes the matching _record function with the resolved value. */
+int flame_ic_get_field(JSContext *ctx, struct JSFunctionBytecode *b,
+                       uint32_t pc_off, JSValueConst obj, JSAtom atom,
+                       JSValue *out);
+void flame_ic_record_field(JSContext *ctx, struct JSFunctionBytecode *b,
+                           uint32_t pc_off, JSValueConst obj, JSAtom atom,
+                           JSValueConst result);
+int flame_ic_get_array_el(JSContext *ctx, struct JSFunctionBytecode *b,
+                          uint32_t pc_off, JSValueConst obj, JSValueConst prop,
+                          JSValue *out);
+void flame_ic_record_array_el(JSContext *ctx, struct JSFunctionBytecode *b,
+                              uint32_t pc_off, JSValueConst obj,
+                              JSValueConst prop, JSValueConst result);
 
 #define FLAME_PROFILE_MAGIC 0x464C414D  /* 'FLAM' */
 
@@ -98,6 +144,10 @@ void flame_fb_record(uint8_t *slot, FlameKind k);
 
 /* Profile lifecycle (defined in flame_profiler.c). */
 void flame_free_profile(struct JSRuntime *rt, void *prof);
+void flame_ic_free_profile(struct JSRuntime *rt, struct FlameProfile *prof);
+
+/* Global IC counters (flame_ic.c). */
+extern uint64_t flame_stat_ic_hits, flame_stat_ic_misses;
 
 /* ------------------------------------------------------------------ */
 /* Hook entry points (called from quickjs.c, defined in Flame sources) */

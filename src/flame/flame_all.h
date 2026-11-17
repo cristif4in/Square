@@ -15,9 +15,9 @@
 
 #include "flame_debug.c"
 #include "flame_profiler.c"
+#include "flame_ic.c"
 
 /* flame_rt.c — runtime state, tiering policy, executable memory  (phase 4) */
-/* flame_ic.c — inline cache side-tables                          (phase 3) */
 /* emitter_x64.c / emitter_arm64.c — machine emitters             (phase 5/6) */
 /* flame_baseline.c — baseline tier                               (phase 5) */
 /* flame_opt.c — optimizing tier, OSR + deopt                     (phase 7/8) */

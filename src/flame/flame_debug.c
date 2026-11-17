@@ -15,6 +15,11 @@ int flame_debug_level = -1;  /* -1 = not yet parsed */
 static int flame_stats_atexit_registered;
 static JSRuntime *flame_stats_rt;
 
+void flame_set_stats_rt(JSRuntime *rt)
+{
+    flame_stats_rt = rt;
+}
+
 int flame_debug_init(void)
 {
     if (flame_debug_level >= 0)
@@ -100,7 +105,11 @@ int flame_is_enabled(JSRuntime *rt)
 void flame_dump_stats(JSRuntime *rt)
 {
     (void)rt;
-    fprintf(stderr, "[flame %s] stats: (no compilations yet)\n", FLAME_VERSION);
+    fprintf(stderr,
+            "[flame %s] stats: ic_hits=%llu ic_misses=%llu\n",
+            FLAME_VERSION,
+            (unsigned long long)flame_stat_ic_hits,
+            (unsigned long long)flame_stat_ic_misses);
 }
 
 void flame_reset_stats(JSRuntime *rt)

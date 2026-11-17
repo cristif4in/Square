@@ -119,6 +119,7 @@ void flame_free_profile(JSRuntime *rt, void *profv)
     FlameProfile *prof = (FlameProfile *)profv;
     if (!prof)
         return;
+    flame_ic_free_profile(rt, prof);
     js_free_rt(rt, prof->binop_fb);
     js_free_rt(rt, prof->calls);
     js_free_rt(rt, prof->loops);

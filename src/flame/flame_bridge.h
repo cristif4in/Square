@@ -45,6 +45,9 @@ void flame_hook_get_array_el(struct JSFunctionBytecode *b, uint32_t pc_off,
 /* Free a per-bytecode profiling side table (called from bytecode finalizer). */
 void flame_free_profile(struct JSRuntime *rt, void *prof);
 
+/* Register the runtime whose stats are dumped at exit (FLAME_DEBUG=stats). */
+void flame_set_stats_rt(struct JSRuntime *rt);
+
 /* Backtrace suppression: while executing Flame's own helpers we want a
  * clean "jit" frame marker. quickjs.c consults this in build_backtrace. */
 int flame_is_jit_frame(struct JSStackFrame *sf);

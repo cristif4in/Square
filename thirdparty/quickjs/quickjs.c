@@ -1696,9 +1696,13 @@ static const JSMallocFunctions def_malloc_funcs = {
 
 JSRuntime *JS_NewRuntime(void)
 {
+    JSRuntime *rt;
     /* Flame: parse FLAME_DEBUG / SQRL_NO_JIT once, on first runtime. */
     flame_global_init();
-    return JS_NewRuntime2(&def_malloc_funcs, NULL);
+    rt = JS_NewRuntime2(&def_malloc_funcs, NULL);
+    if (rt)
+        flame_set_stats_rt(rt);
+    return rt;
 }
 
 void JS_SetMemoryLimit(JSRuntime *rt, size_t limit)
@@ -17617,10 +17621,25 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 4;
 
 #if CONFIG_FLAME
-                flame_hook_get_field(b, (uint32_t)(pc - 5 - b->byte_code_buf), sp[-1], atom);
+                {
+                    JSValue ic_val;
+                    if (flame_ic_get_field(ctx, b,
+                            (uint32_t)(pc - 5 - b->byte_code_buf),
+                            sp[-1], atom, &ic_val)) {
+                        JS_FreeValue(ctx, sp[-1]);
+                        sp[-1] = ic_val;
+                        BREAK;
+                    }
+                }
 #endif
                 sf->cur_pc = pc;
                 val = JS_GetProperty(ctx, sp[-1], atom);
+#if CONFIG_FLAME
+                if (likely(!JS_IsException(val)))
+                    flame_ic_record_field(ctx, b,
+                        (uint32_t)(pc - 5 - b->byte_code_buf),
+                        sp[-1], atom, val);
+#endif
                 if (unlikely(JS_IsException(val)))
                     goto exception;
                 JS_FreeValue(ctx, sp[-1]);
@@ -17843,10 +17862,27 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JSValue val;
 
 #if CONFIG_FLAME
-                flame_hook_get_array_el(b, (uint32_t)(pc - 1 - b->byte_code_buf), sp[-2], sp[-1]);
+                {
+                    JSValue ic_val;
+                    if (flame_ic_get_array_el(ctx, b,
+                            (uint32_t)(pc - 1 - b->byte_code_buf),
+                            sp[-2], sp[-1], &ic_val)) {
+                        JS_FreeValue(ctx, sp[-2]);
+                        JS_FreeValue(ctx, sp[-1]);
+                        sp[-2] = ic_val;
+                        sp--;
+                        BREAK;
+                    }
+                }
 #endif
                 sf->cur_pc = pc;
                 val = JS_GetPropertyValue(ctx, sp[-2], sp[-1]);
+#if CONFIG_FLAME
+                if (likely(!JS_IsException(val)))
+                    flame_ic_record_array_el(ctx, b,
+                        (uint32_t)(pc - 1 - b->byte_code_buf),
+                        sp[-2], sp[-1], val);
+#endif
                 JS_FreeValue(ctx, sp[-2]);
                 sp[-2] = val;
                 sp--;
