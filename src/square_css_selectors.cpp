@@ -1,8 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_css_selectors.cpp
- *  Selector matching: pseudo-classes, attribute selectors, compound and
- *  full right-to-left matching.
- * ===================================================================== */
+/* Selector matching: pseudo-classes, attribute selectors, compound and, full right-to-left matching */
 #include "square_css_internal.h"
 
 #include <algorithm>
@@ -10,7 +6,6 @@
 #include <cstdlib>
 
 namespace sqrl {
-/* ============================ selector matching ============================ */
 static bool nth_match(const std::string& arg, int index /*1-based*/) {
   /* forms: odd, even, 5, 2n, 2n+1, -n+3, n */
   std::string a = lc(trim(arg));
@@ -164,7 +159,7 @@ static bool pseudo_class_match(const Node* el, const std::string& pc) {
     return false;
   }
   if (starts_with(pc, "has(")) {
-    /* :has(<relative-selector>) — the relative selector is evaluated against
+    /* :has(<relative-selector>), the relative selector is evaluated against
      * el's descendants (and siblings, when the inner selector starts with a
      * combinator). The spec anchor element is `el`. We support:
      *   :has(.foo)              any descendant matching .foo
@@ -223,7 +218,7 @@ static bool pseudo_class_match(const Node* el, const std::string& pc) {
         size_t i = 0;
         for (; i < sibs.size(); i++) if (sibs[i] == el) break;
         if (leading_comb == 2) {
-          /* adjacent: nearest preceding element sibling — but :has(+ X) tests
+          /* adjacent: nearest preceding element sibling, but :has(+ X) tests
            * the FOLLOWING sibling per spec; we test the next element after el */
           for (size_t k = i + 1; k < sibs.size(); k++) {
             if (sibs[k]->type == N_ELEMENT) {

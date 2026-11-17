@@ -1,9 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_layout_table.cpp
- *  Table layout: row/cell collection with anonymous table objects,
- *  column sizing (width styles, min/max-content), colspan/rowspan and
- *  vertical cell alignment.
- * ===================================================================== */
+/* Table layout: row/cell collection with anonymous table objects, column sizing (width styles, min/max-content), colspan/rowspan and, vertical cell alignment */
 #include "square_layout_internal.h"
 
 #include <algorithm>
@@ -456,7 +451,7 @@ float layout_table_content(Box* b, Node* el, LayoutCtx& lc) {
     y += rowh[r];
   }
 
-  /* border-collapse: collapse — zero shared cell edges so each shared
+  /* border-collapse: collapse, zero shared cell edges so each shared
    * border paints once; geometry (w/cw) is left untouched */
   if (cs->border_collapse) {
     for (size_t r = 0; r < rows.size(); r++) {

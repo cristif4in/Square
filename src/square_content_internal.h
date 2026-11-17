@@ -1,10 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — internal header shared by the content module:
- *    square_content.cpp   HTML tokenizer + tree builder + serialization
- *    square_css.cpp       CSS tokenizer, selectors, stylesheet parser
- *    square_style.cpp     CSS values, declaration application, cascade
- *  Not installed publicly — engine-internal only.
- * ===================================================================== */
+/* Square_content.cpp HTML tokenizer + tree builder + serialization, square_css.cpp CSS tokenizer, selectors, stylesheet parser, square_style.cpp CSS values, declaration application, cascade, Not installed publicly, engine-internal only */
 #pragma once
 
 #include "square_internal.h"
@@ -14,19 +8,15 @@
 
 namespace sqrl {
 
-/* ---- small string utils (defined in square_content.cpp) ---- */
 std::string lc(std::string s);
 std::string trim(const std::string& s);
 bool starts_with(const std::string& s, const char* p);
 std::string strip_quotes(const std::string& s);
 
-/* ---- character references (defined in square_content.cpp) ---- */
 void decode_entities_into(const std::string& in, std::string* out);
 
-/* ---- declaration-block parser (defined in square_css.cpp) ---- */
 void parse_declarations(const std::string& body, std::vector<Declaration>* out);
 
-/* ---- CSS tokenizer cursor (shared by stylesheet + value parsing) ---- */
 struct CssCursor {
   const std::string& s;
   size_t i = 0;

@@ -1,13 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — internal shared definitions
- *  Modules:
- *    square_content.cpp   HTML parser, CSS parser, cascade, computed styles
- *    square_layout_*.cpp  box tree, layout (block/inline/flex/grid/abs),
- *                         paint (see square_layout_internal.h for the map)
- *    square_gfx.cpp       software rasterizer, fonts, images, SVG
- *    square_net.cpp       HTTP/1.1 + TLS + gzip + URL + thread pool
- *    square_platform.cpp  engine instance, load pipeline, QuickJS + DOM API
- * ===================================================================== */
+/* Modules:, square_content.cpp HTML parser, CSS parser, cascade, computed styles, square_layout_*.cpp box tree, layout (block/inline/flex/grid/abs), paint (see square_layout_internal.h for the map), square_gfx.cpp software rasterizer, fonts, images, SVG, square_net.cpp HTTP/1.1 + TLS + gzip + URL + thread pool, square_platform.cpp engine instance, load pipeline, QuickJS + DOM API */
 #pragma once
 
 #include "square.h"
@@ -27,7 +18,6 @@
 
 namespace sqrl {
 
-/* ============================ value types ============================ */
 
 struct Color {
   uint8_t a = 255, r = 0, g = 0, b = 0;
@@ -88,13 +78,12 @@ enum TrackType : uint8_t { TR_AUTO = 0, TR_PX, TR_PCT, TR_FR, TR_MINMAX, TR_SUBG
 struct Track {
   TrackType type = TR_AUTO;
   float v = 0;                   /* px / pct / fr factor */
-  std::shared_ptr<Track> mn;     /* minmax: owned (shared_ptr → deep-copyable) */
+  std::shared_ptr<Track> mn;     /* minmax: owned (shared_ptr to deep-copyable) */
   std::shared_ptr<Track> mx;
   Track() {}
   Track(TrackType t) : type(t), v(t == TR_FR ? 1.f : 0.f) {}
 };
 
-/* ============================ DOM ============================ */
 
 enum NodeType : uint8_t { N_DOCUMENT = 0, N_ELEMENT, N_TEXT, N_COMMENT, N_DOCTYPE };
 struct Attr { std::string name, value; };
@@ -160,7 +149,6 @@ struct Node {
 extern Node* g_hover_node;
 extern Node* g_focus_node; /* last clicked focusable element (:focus) */
 
-/* ============================ CSS structures ============================ */
 
 struct AttrSel { std::string name, val; char op = 0; /* 0 exists, '=', '~', '|', '^', '$', '*' */ };
 struct SelPart {
@@ -232,7 +220,7 @@ struct Rule {
   int origin = 1;                /* 0 = user-agent, 1 = author */
   int order = 0;                 /* document order for tie-breaks */
   bool starting = false;         /* @starting-style rule */
-  /* @container <name>? (<features>) — when non-empty, the rule applies only
+  /* @container <name>? (<features>), when non-empty, the rule applies only
    * to elements whose nearest containing ancestor (container-type != none)
    * satisfies the size conditions. name_filter empty = "any container". */
   std::shared_ptr<MediaQuery> container_query;
@@ -295,7 +283,6 @@ struct Document {
   ~Document();
 };
 
-/* ============================ computed style ============================ */
 
 enum Display : uint8_t {
   D_NONE = 0, D_BLOCK, D_INLINE, D_INLINE_BLOCK, D_FLEX, D_INLINE_FLEX,
@@ -504,7 +491,6 @@ struct ComputedStyle {
 /* custom properties held per node */
 typedef std::unordered_map<std::string, std::string> CustomProps;
 
-/* ============================ layout box ============================ */
 
 struct GlyphPos { uint32_t gi; float x; void* font = nullptr; /* set when a fallback font supplied the glyph */ };
 
@@ -579,7 +565,6 @@ struct ImageInfo {
   std::string url;
 };
 
-/* ============================ networking (square_net.cpp) ============================ */
 
 struct HttpHeader { std::string name, value; };
 
@@ -637,7 +622,6 @@ class ThreadPool {
   Impl* impl_;
 };
 
-/* ============================ gfx (square_gfx.cpp) ============================ */
 
 struct Surface {
   int w = 0, h = 0, stride = 0;          /* stride in bytes */
@@ -654,7 +638,7 @@ struct Surface {
   uint32_t* row32(int y) const { return (uint32_t*)(pix + (size_t)y * stride); }
 };
 
-/* font request → cached handle. families in preference order ("Inter", "sans-serif"...) */
+/* font request to cached handle. families in preference order ("Inter", "sans-serif"...) */
 void* font_resolve(const std::vector<std::string>& families, int weight, bool italic, float size_px);
 void font_register_webface(const std::string& family, int weight, bool italic,
                            std::vector<uint8_t> data);
@@ -673,7 +657,7 @@ int  image_add_rgba(int w, int h, std::vector<uint8_t> rgba); /* returns gfx id 
 bool image_decode(const std::vector<uint8_t>& bytes, int* out_gfx_id, int* out_w, int* out_h);
 void image_cache_clear();
 
-/* drawing primitives — all coordinates in surface space, already clipped rects are
+/* drawing primitives, all coordinates in surface space, already clipped rects are
  * passed via `clip` (axis-aligned, may be nullptr) and optional rounded clip `rc`. */
 void gfx_ring_rect(Surface& s, const Rect& r, const float radius[4], const float bwd[4],
                    Color c, const Rect* clip, const RoundedClip* rc);
@@ -694,8 +678,8 @@ void gfx_draw_glyphs(Surface& s, void* font, float x, float y_baseline,
 struct PathData {
   std::vector<float> pts;
   std::vector<uint8_t> cmds;
-  Color fill{0, 0, 0, 0};                /* a==0 → no fill */
-  Color stroke{0, 0, 0, 0};              /* a==0 → no stroke */
+  Color fill{0, 0, 0, 0};                /* a==0 to no fill */
+  Color stroke{0, 0, 0, 0};              /* a==0 to no stroke */
   float stroke_w = 1;
   uint8_t fill_rule = 0;                 /* 0 nonzero, 1 evenodd */
 };
@@ -797,7 +781,6 @@ float scrollbar_metrics(const Document* doc, float viewport_h, float page_h,
 bool parse_css_color(const std::string& raw, Color* out);
 void paint_debug_counts(int* boxes, int* frags, int* imgs);
 
-/* ============================ content module (square_content.cpp) ============================ */
 
 /* parse a full HTML document (utf8/latin bytes) */
 Document* html_parse_document(const std::string& bytes);

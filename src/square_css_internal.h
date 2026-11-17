@@ -1,9 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_css_internal.h
- *  Shared declarations between the CSS modules:
- *    square_css.cpp             stylesheet / selector / media-query parsing
- *    square_css_selectors.cpp   selector matching
- * ===================================================================== */
+/* Shared declarations between the CSS modules:, square_css.cpp stylesheet / selector / media-query parsing, square_css_selectors.cpp selector matching */
 #pragma once
 
 #include "square_content_internal.h"

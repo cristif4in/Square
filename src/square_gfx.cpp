@@ -1,10 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_gfx.cpp
- *  Software rasterizer: rounded rects, gradients, shadows, images,
- *  glyphs (embedded Inter + system fonts), paths, SVG, PNG export.
- *  Pixel format: 32bpp BGRA in memory (0xAARRGGBB on little-endian),
- *  straight (non-premultiplied) alpha, src-over compositing.
- * ===================================================================== */
+/* Software rasterizer: rounded rects, gradients, shadows, images, glyphs (embedded Inter + system fonts), paths, SVG, PNG export. Pixel format: 32bpp BGRA in memory (0xAARRGGBB on little-endian), straight (non-premultiplied) alpha, src-over compositing */
 #include "square_gfx_internal.h"
 
 #include <algorithm>
@@ -33,7 +27,6 @@ void Surface::free_pix() {
   own = false;
 }
 
-/* ============================ blending ============================ */
 uint32_t blend_src_over(uint32_t d, uint32_t s) {
   uint32_t sa = (s >> 24) & 255;
   if (sa == 255) return s | 0xFF000000;
@@ -55,7 +48,6 @@ uint32_t scale_alpha(uint32_t c, float k) {
   return (a << 24) | (c & 0xFFFFFF);
 }
 
-/* ============================ rounded rect SDF ============================ */
 /* p relative to box center; he = half extents; r = tl,tr,br,bl (already clamped) */
 static inline float sdf_round_rect(float px, float py, float hx, float hy, const float r[4]) {
   float rad;
@@ -124,7 +116,6 @@ void bounds_intersect(const Rect& r, const Rect* clip, int* x0, int* y0, int* x1
   *y1 = std::min(s.h, (int)ceilf(fy1));
 }
 
-/* ============================ fill_rect ============================ */
 void gfx_fill_rect(Surface& s, const Rect& r, Color c, const float radius[4],
                    const Rect* clip, const RoundedClip* rc) {
   if (c.a == 0 || r.empty()) return;
@@ -147,9 +138,7 @@ void gfx_fill_rect(Surface& s, const Rect& r, Color c, const float radius[4],
       if (rounded) cov = cov_round_rect(px, py, r.x, r.y, r.w, r.h, rad);
       else cov = 1;
       if (cov < 1) {
-        if (rc && rc->active) cov *= 1; /* rc applied below */
-        float rcov = clip_cov(px, py, clip, rc);
-        cov *= rcov;
+        cov *= clip_cov(px, py, clip, rc);
       } else {
         cov = clip_cov(px, py, clip, rc);
       }
@@ -204,11 +193,10 @@ void gfx_ring_rect(Surface& s, const Rect& r, const float radius[4], const float
   }
 }
 
-/* ============================ gradients ============================ */
 void build_lut(const std::vector<GradStop>& stops, GradLUT* lut) {
   std::vector<GradStop> st = stops;
   /* CSS: unset stop positions are distributed evenly between their defined
-   * neighbours (first unset → 0, last unset → 1). Raw parse stores pos=-1. */
+   * neighbours (first unset to 0, last unset to 1). Raw parse stores pos=-1. */
   if (!st.empty()) {
     if (st.front().pos < 0) st.front().pos = 0;
     if (st.back().pos < 0) st.back().pos = 1;
@@ -305,7 +293,6 @@ void gfx_fill_gradient(Surface& s, const Rect& r, const GradSpec& g,
   }
 }
 
-/* ============================ filters ============================ */
 static uint8_t clamp_u8(float v) {
   return (uint8_t)std::min(255.f, std::max(0.f, v + 0.5f));
 }
@@ -376,7 +363,6 @@ void gfx_apply_filter(Surface& s, const Rect& r, const FilterSpec& fx) {
   }
 }
 
-/* ============================ string helpers ============================ */
 std::string lower_copy(std::string s) {
   for (auto& c : s) c = (char)tolower((unsigned char)c);
   return s;
@@ -387,7 +373,6 @@ std::string trim_copy(const std::string& s) {
   while (b > a && isspace((unsigned char)s[b - 1])) b--;
   return s.substr(a, b - a);
 }
-/* ============================ shadows ============================ */
 void gfx_draw_shadow(Surface& s, const Rect& r, const float radius[4], const Shadow& sh,
                      const Rect* clip) {
   if (r.empty()) return;
@@ -456,7 +441,7 @@ void gfx_draw_shadow(Surface& s, const Rect& r, const float radius[4], const Sha
   }
   uint32_t col = color_u32(Color{sh.color.a, sh.color.r, sh.color.g, sh.color.b});
   int ox = (int)roundf(sh.dx), oy = (int)roundf(sh.dy);
-  /* the cov buffer covers the rect starting at (er.x, er.y) — map surface
+  /* the cov buffer covers the rect starting at (er.x, er.y), map surface
    * coords into buffer coords (buffer origin != surface origin) */
   int bx0 = (int)floorf(er.x), by0 = (int)floorf(er.y);
   int x0 = std::max(0, bx0 - ox), y0 = std::max(0, by0 - oy);
@@ -468,14 +453,13 @@ void gfx_draw_shadow(Surface& s, const Rect& r, const float radius[4], const Sha
       float rc_cov = 1;
       if (clip && !clip->contains(px, py)) continue;
       float c = cov[(size_t)(y + oy - by0) * bw + (x + ox - bx0)];
-      if (c <= 0.002f) continue;
+      if (c <= 0.002f) continue; /* below 0.2% coverage, skip the blend */
       uint32_t src = scale_alpha(col, c * rc_cov);
       row[x] = blend_src_over(row[x], src);
     }
   }
 }
 
-/* ============================ paths ============================ */
 struct PathEdge { float x0, y0, x1, y1; };
 
 static void path_coverage(const PathData& p, int bw, int bh, const Rect& bounds, std::vector<float>& cov) {
@@ -501,7 +485,7 @@ static void path_coverage(const PathData& p, int bw, int bh, const Rect& bounds,
   }
   if (sx != cx || sy != cy) edges.push_back({cx, cy, sx, sy});
   if (edges.empty()) return;
-  int samples = 4;
+  int samples = 4; /* 4x4 supersampling per pixel */
   float sstep = 1.f / samples;
   for (int py = 0; py < bh; py++) {
     for (int px = 0; px < bw; px++) {
@@ -561,7 +545,7 @@ void gfx_draw_path(Surface& s, const PathData& p, const Rect* clip) {
         int xx = (int)bounds.x + x;
         if (xx < 0 || xx >= s.w) continue;
         float c = cov[(size_t)y * bw + x];
-        if (c <= 0.002f) continue;
+        if (c <= 0.002f) continue; /* below 0.2% coverage, skip the blend */
         row[xx] = blend_src_over(row[xx], scale_alpha(col, c));
       }
     }
@@ -610,7 +594,6 @@ void gfx_draw_path(Surface& s, const PathData& p, const Rect* clip) {
   }
 }
 
-/* ============================ blit ============================ */
 void gfx_blit(Surface& dst, const Surface& src, float alpha, const Rect* clip,
               const RoundedClip* rc) {
   int x0 = 0, y0 = 0;
@@ -643,7 +626,6 @@ void gfx_blit(Surface& dst, const Surface& src, float alpha, const Rect* clip,
   }
 }
 
-/* ============================ PNG export ============================ */
 bool gfx_write_png(const char* path, const uint8_t* bgra, int w, int h, int stride) {
   if (!path || !bgra || w <= 0 || h <= 0) return false;
   std::vector<uint8_t> rgba((size_t)w * h * 4);
@@ -660,7 +642,6 @@ bool gfx_write_png(const char* path, const uint8_t* bgra, int w, int h, int stri
   }
   return stbi_write_png(path, w, h, 4, rgba.data(), w * 4) != 0;
 }
-/* ============================ blit with matrix + region blur ============================ */
 void gfx_blit_matrix(Surface& dst, const Surface& src, const float mat[6],
                      float pivot_x, float pivot_y, float alpha, const Rect* clip) {
   /* src coords -> dst coords: d = M * (s - pivot) + pivot */

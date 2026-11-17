@@ -11,12 +11,11 @@
 #define STBI_ONLY_TGA
 #define STB_IMAGE_STATIC
 #include "../thirdparty/stb_image.h"
-/* full WebP support (VP8 lossy + VP8L lossless + alpha) — vendored libwebp decoder */
+/* full WebP support (VP8 lossy + VP8L lossless + alpha), vendored libwebp decoder */
 #include "webp/decode.h"
 
 namespace sqrl {
 
-/* ============================ images ============================ */
 struct StoredImage {
   int w, h;
   std::vector<uint32_t> px;  /* 0xAARRGGBB */
@@ -41,7 +40,6 @@ bool image_decode(const std::vector<uint8_t>& bytes, int* out_gfx_id, int* out_w
     engine_log(1, "[img-decode] %zu bytes head %02x %02x %02x %02x", bytes.size(), bytes[0],
                bytes[1], bytes[2], bytes[3]);
 
-  /* ---- WebP (RIFF....WEBP) via vendored libwebp decoder ---- */
   if (bytes.size() >= 12 && memcmp(bytes.data(), "RIFF", 4) == 0 &&
       memcmp(bytes.data() + 8, "WEBP", 4) == 0) {
     int wp_w = 0, wp_h = 0;
@@ -60,7 +58,6 @@ bool image_decode(const std::vector<uint8_t>& bytes, int* out_gfx_id, int* out_w
     return false;
   }
 
-  /* ---- SVG (<svg ...> possibly after <?xml ...?>) → raster via svg_render ---- */
   if (bytes.size() >= 8 && bytes.size() < 4 * 1024 * 1024) {
     size_t scan = std::min(bytes.size(), (size_t)512);
     bool maybe_svg = false;

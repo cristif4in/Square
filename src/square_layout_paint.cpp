@@ -1,9 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_layout_paint.cpp
- *  Paint traversal of the box tree into the gfx rasterizer: backgrounds,
- *  borders, inline fragments, replaced content, z-ordering, transform /
- *  opacity layering, scrollbar and the document paint entry point.
- * ===================================================================== */
+/* Paint traversal of the box tree into the gfx rasterizer: backgrounds, borders, inline fragments, replaced content, z-ordering, transform /, opacity layering, scrollbar and the document paint entry point */
 #include "square_layout_internal.h"
 
 #include <algorithm>
@@ -11,13 +6,11 @@
 
 namespace sqrl {
 
-/* ============================ paint debug counters ============================ */
 static int g_painted_boxes = 0, g_painted_frags = 0, g_painted_images = 0;
 void paint_debug_counts(int* boxes, int* frags, int* imgs) {
   *boxes = g_painted_boxes; *frags = g_painted_frags; *imgs = g_painted_images;
 }
 
-/* ============================ paint ============================ */
 struct PaintCtx {
   Surface* s = nullptr;
   Rect clip;
@@ -395,7 +388,7 @@ static void paint_form_control(Surface& ts, PaintCtx& ctx, Node* n, ComputedStyl
     for (auto& c : type) c = (char)tolower((unsigned char)c);
     const Rect* clip = &target.clip;
     const RoundedClip* rcp = target.rc.active ? &target.rc : nullptr;
-    Color accent{255, 26, 115, 219};    /* a,r,g,b — #1a73db-ish */
+    Color accent{255, 26, 115, 219};    /* a,r,g,b, #1a73db-ish */
     Color border{255, 118, 118, 118};   /* #767676 */
     Color ink = cs->color;
     Color muted{255, 130, 130, 130};
@@ -592,7 +585,7 @@ static void paint_box(Box* b, PaintCtx& ctx) {
     gfx_draw_shadow(ts, {b->x, b->y, b->w, b->h}, rad, sh, &target.clip);
   }
 
-  /* border: paint as 4 strips (ring), NOT as a full-box fill — a full fill
+  /* border: paint as 4 strips (ring), NOT as a full-box fill, a full fill
    * would flood bordered-but-transparent elements (Tailwind preflight sets
    * border-color on *). Different colors per side are respected. */
   bool any_border = b->bor_t > 0 || b->bor_r > 0 || b->bor_b > 0 || b->bor_l > 0;
@@ -798,7 +791,7 @@ static void paint_box(Box* b, PaintCtx& ctx) {
   }
 
   /* frags first (inline content), then non-positioned block kids, then
-   * positioned content (relative in-flow + absolute/fixed) in DOM order —
+   * positioned content (relative in-flow + absolute/fixed) in DOM order,
    * CSS paint order: positioned z-auto boxes paint above normal flow. */
   paint_frags(b, target);
   std::vector<Box*> positioned_kids;
@@ -877,7 +870,6 @@ static void dump_box_tree(Box* b, int depth, int max_depth) {
   for (size_t i = 0; i < b->kids.size() && i < 8; i++) dump_box_tree(b->kids[i], depth + 1, max_depth);
 }
 
-/* ============================ scrollbar ============================ */
 /* shared geometry: returns effective scrollbar width (0 = hidden); fills
  * thumb position/height in track coords (track spans 0..viewport_h) */
 float scrollbar_metrics(const Document* doc, float viewport_h, float page_h,

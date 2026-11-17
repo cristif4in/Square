@@ -1,8 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_style.cpp
- *  CSS value parsing (lengths, calc, colors, gradients), declaration
- *  application (apply_declaration) and the cascade (style_tree).
- * ===================================================================== */
+/* CSS value computation: lengths, calc, colors, gradients, transforms, filters */
 #include "square_content_internal.h"
 #include "square_style_internal.h"
 
@@ -52,7 +48,7 @@ std::string substitute_vars(const std::string& val, const ResolveCtx& rc, int de
       } else if (!fallback.empty()) {
         out += substitute_vars(fallback, rc, depth + 1);
       } else {
-        /* unresolved: emit nothing (property becomes invalid → treated as unset) */
+        /* unresolved: emit nothing (property becomes invalid to treated as unset) */
         out += " ";
       }
       i += 4 + inner.size() + 1;
@@ -94,7 +90,7 @@ Length parse_length_component(const std::string& t) {
       while (k < s.size() && isdigit((unsigned char)s[k])) k++;
       num_end = k;
     } else {
-      (void)save; /* 'e' belongs to the unit (em/ex) — leave it */
+      (void)save; /* 'e' belongs to the unit (em/ex), leave it */
     }
   }
   std::string numstr = s.substr(0, num_end);
@@ -128,7 +124,7 @@ Length parse_length_component(const std::string& t) {
   return L;
 }
 
-/* calc() → flat sum of terms (recursive descent with * / precedence) */
+/* calc() to flat sum of terms (recursive descent with * / precedence) */
 struct CalcParser {
   std::vector<std::string> toks;
   size_t pos = 0;
@@ -779,7 +775,6 @@ float resolve_length(const Length& L, float pct_basis, float em, float rem, floa
   return L.val;
 }
 
-/* ============================ declaration application ============================ */
 void split_values(const std::string& v, std::vector<std::string>* out, const char* seps) {
   out->clear();
   std::string cur;
@@ -866,7 +861,7 @@ void parse_background(const std::string& raw, ComputedStyle* cs, const ResolveCt
       layer.url = tc.read_url();
     } else if (lt.find("gradient(") != std::string::npos) {
       std::string g = t;
-      /* gradient may span multiple toks if it has spaces — rejoin until parens balance */
+      /* gradient may span multiple toks if it has spaces, rejoin until parens balance */
       std::string joined = t;
       int paren = 0;
       for (char c : t) { if (c == '(') paren++; if (c == ')') paren--; }

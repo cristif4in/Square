@@ -1,8 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_content.cpp
- *  HTML5 tokenizer + tree builder, CSS parser, selector matching,
- *  cascade / computed styles, serialization.
- * ===================================================================== */
+/* HTML5 tokenizer + tree builder, CSS parser, selector matching, cascade / computed styles, serialization */
 #include "square_content_internal.h"
 
 #include <algorithm>
@@ -16,7 +12,6 @@ Document::~Document() {
   if (root) node_free(root);
 }
 
-/* ============================ small utils ============================ */
  std::string lc(std::string s) {
   for (auto& c : s) c = (char)tolower((unsigned char)c);
   return s;
@@ -37,7 +32,6 @@ Document::~Document() {
    return s;
  }
 
-/* ============================ character references ============================ */
 struct EntEntry { const char* name; const char* utf8; };
 static const EntEntry k_entities[] = {
   {"amp", "&"}, {"lt", "<"}, {"gt", ">"}, {"quot", "\""}, {"apos", "'"},
@@ -106,7 +100,6 @@ void decode_entities_into(const std::string& in, std::string* out) {
   }
 }
 
-/* ============================ HTML tokenizer + tree ============================ */
 static const char* k_void_elements[] = {
   "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
   "param", "source", "track", "wbr", nullptr
@@ -560,7 +553,6 @@ void node_free(Node* n) {
   delete n;
 }
 
-/* ============================ serialization ============================ */
 static void escape_html(const std::string& s, std::string* out) {
   for (char c : s) {
     switch (c) {

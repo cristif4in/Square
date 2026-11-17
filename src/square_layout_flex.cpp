@@ -1,8 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_layout_flex.cpp
- *  Flexbox layout: item collection (blockification), hypothetical main
- *  sizes, per-line flexing, justify/align and auto-margin absorption.
- * ===================================================================== */
+/* Flexbox layout: item collection (blockification), hypothetical main, sizes, per-line flexing, justify/align and auto-margin absorption */
 #include "square_layout_internal.h"
 
 #include <algorithm>
@@ -10,7 +6,6 @@
 
 namespace sqrl {
 
-/* ============================ flex layout ============================ */
 struct FlexItem {
   Node* node = nullptr;
   Box* box = nullptr;
@@ -252,7 +247,6 @@ float layout_flex_content(Box* b, Node* el, LayoutCtx& lc) {
     }
     float y = 0;
     for (auto& line : lines) {
-      /* ---- per-line flexing (spec §9.7) ---- */
       float used = line.its.size() > 1 ? gap_main * (float)(line.its.size() - 1) : 0;
       float sum_grow = 0, sum_shrink = 0;
       for (auto* itp : line.its) {

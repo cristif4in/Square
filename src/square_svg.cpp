@@ -218,7 +218,7 @@ static bool parse_transform(const std::string& t, SvgMat* out) {
   return true;
 }
 
-/* SVG path d → flattened polyline (cmds M/L/Z) */
+/* SVG path d to flattened polyline (cmds M/L/Z) */
 struct SvgPathBuilder {
   std::vector<float> pts;
   std::vector<uint8_t> cmds;
@@ -227,7 +227,7 @@ struct SvgPathBuilder {
   void line(float x, float y) { cmds.push_back(1); pts.push_back(x); pts.push_back(y); cx = x; cy = y; }
   void close() { cmds.push_back(2); cx = sx; cy = sy; }
   void curve(float x1, float y1, float x2, float y2, float x, float y) {
-    int N = 24;
+    int N = 24; /* cubic subdivision: 24 segments per curve */
     for (int i = 1; i <= N; i++) {
       float t = (float)i / N;
       float mt = 1 - t;
@@ -731,6 +731,7 @@ static void render_svg_node(SvgCtx* ctx, SvgNode* n, SvgPaintState ps) {
       pb.line(x, y + h);
       pb.close();
     } else {
+      /* rounded rect: bezier arcs use the 0.5523 circle-approximation kappa */
       pb.move(x + rx, y);
       pb.line(x + w - rx, y);
       pb.curve(x + w - rx + rx * 0.5523f, y, x + w, y + ry - ry * 0.5523f, x + w, y + ry);
@@ -804,7 +805,7 @@ static void render_svg_node(SvgCtx* ctx, SvgNode* n, SvgPaintState ps) {
     SvgGrad& g = ctx->grads[grad_id];
     GradLUT lut;
     build_lut(g.stops, &lut);
-    /* gradient axis in user space → transformed by g.mat then ps.mat */
+    /* gradient axis in user space to transformed by g.mat then ps.mat */
     float bbx[2] = {0, 0}, bby[2] = {0, 0};
     if (g.user_space) {
       bbx[0] = g.x1; bbx[1] = g.x2; bby[0] = g.y1; bby[1] = g.y2;
@@ -842,7 +843,7 @@ static void render_svg_node(SvgCtx* ctx, SvgNode* n, SvgPaintState ps) {
         } else {
           float wx, wy;
           SvgMat inv_all = ps.mat;
-          /* approximate: assume content transform maps user → surface; invert locally */
+          /* approximate: assume content transform maps user to surface; invert locally */
           float det = inv_all.m[0] * inv_all.m[3] - inv_all.m[1] * inv_all.m[2];
           if (fabsf(det) < 1e-9) det = 1;
           float ix = (x - inv_all.m[4]) / det * inv_all.m[3] - (y - inv_all.m[5]) / det * inv_all.m[2];
@@ -911,11 +912,11 @@ Surface* svg_render(const std::string& svg_text, float w, float h, Color current
       if (k->tag == "svg") { svg = k; break; }
   }
   collect_defs(&ctx, svg);
-  /* content transform: viewBox → surface with xMidYMid meet */
+  /* content transform: viewBox to surface with xMidYMid meet */
   SvgPaintState ps;
   ps.grad_id = "";
   /* Color field order is {a,r,g,b}: {0,0,0,255} here was accidentally
-   * TRANSPARENT — SVG default fill must be opaque black */
+   * TRANSPARENT, SVG default fill must be opaque black */
   ps.st.fill = Color{255, 0, 0, 0};
   ps.st.stroke = Color{0, 0, 0, 0};
   ps.st.color = current_color;

@@ -1,10 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — internal header shared by the platform module:
- *    square_platform.cpp       engine instance, QuickJS bindings, JS
- *                              prelude, page load pipeline + event loop
- *    square_platform_api.cpp   remaining bindings, public C API, input
- *  Not installed publicly — engine-internal only.
- * ===================================================================== */
+/* Square_platform.cpp engine instance, QuickJS bindings, JS, prelude, page load pipeline + event loop, square_platform_api.cpp remaining bindings, public C API, input, Not installed publicly, engine-internal only */
 #pragma once
 
 #include "square_internal.h"
@@ -25,7 +19,6 @@
 
 namespace sqrl {
 
-/* ============================ image cache ============================ */
 /* general performance: the image cache is bounded by an LRU policy so
  * long-running sessions on image-heavy pages (galleries, infinite scroll)
  * don't accumulate every decoded image forever. When the map exceeds
@@ -67,10 +60,10 @@ struct ImageCache : ImageCacheView {
       lru_pos.erase(old_key);
       auto mit = map.find(old_key);
       if (mit != map.end()) {
-        /* drop the gfx image too — image_cache_clear is global, so we don't
+        /* drop the gfx image too, image_cache_clear is global, so we don't
          * call it here; the platform teardown handles final cleanup. For
          * mid-session eviction we just drop the metadata; the pixels stay
-         * until image_cache_clear() runs. This is a soft eviction — the URL
+         * until image_cache_clear() runs. This is a soft eviction, the URL
          * is forgotten, so a re-fetch will re-decode. */
         map.erase(mit);
       }
@@ -105,7 +98,6 @@ struct ImageCache : ImageCacheView {
   }
 };
 
-/* ============================ instance ============================ */
 struct Timer {
   int id = 0;
   double when = 0;      /* ms epoch from engine start */
@@ -126,7 +118,7 @@ struct Instance {
   std::mutex doc_mtx;             /* serializes DOM tree access (JS thread vs layout) */
   std::atomic<int> state{SQ_STATE_IDLE};
   std::atomic<bool> cancel{false};
-  std::atomic<bool> dirty{false}; /* DOM/style changed → relayout */
+  std::atomic<bool> dirty{false}; /* DOM/style changed to relayout */
   std::atomic<int> loading{0};    /* pending resource fetches */
   int vw = 1280, vh = 800;
   int scroll_y = 0;               /* current scroll offset (page coords) */
@@ -199,7 +191,6 @@ struct Instance {
   Instance() : pool(std::max(2, (int)std::thread::hardware_concurrency())) {}
 };
 
-/* ============================ shared globals ============================ */
 extern std::unordered_map<int64_t, Node*> g_node_registry;
 extern std::mutex g_reg_mtx;
 extern std::unordered_map<Node*, int64_t> g_node_ids;
@@ -207,7 +198,6 @@ extern int64_t g_next_node_id;
 extern Node* g_document_node;      /* "__document__" sentinel */
 extern JSClassID node_class_id;
 
-/* ============================ shared functions ============================ */
 std::string plat_lc(std::string s);
 extern std::mutex g_log_mtx;
 extern square_log_fn g_log_fn;
@@ -273,7 +263,6 @@ void pump_fetches(Instance* inst);
 void pump_raf(Instance* inst);
 void fire_timers(Instance* inst);
 
-/* ---- bindings defined in square_platform_api.cpp, used by the runtime setup ---- */
 JSValue js_fetch_start(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv);
 JSValue js_attr_names(JSContext* ctx, JSValueConst t, int argc, JSValueConst* argv);
 JSValue js_remove_all_children(JSContext* ctx, JSValueConst t, int argc, JSValueConst* argv);

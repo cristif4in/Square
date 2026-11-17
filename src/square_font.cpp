@@ -16,7 +16,6 @@
 
 namespace sqrl {
 
-/* ============================ fonts ============================ */
 struct FontEntry {
   stbtt_fontinfo info;
   float size;
@@ -94,7 +93,6 @@ static void scan_system_fonts() {
 static inline int utf8_next(const char* s, size_t len, size_t* i, int* cp);
 static void utf8_append(std::string& s, int cp);
 
-/* ============================ script fallback ============================ */
 /* Unicode script buckets for glyph-missing fallback (Arabic, CJK, ...) */
 enum ScriptCat { SC_NONE = 0, SC_ARABIC, SC_HEBREW, SC_CJK, SC_KANA, SC_HANGUL, SC_THAI,
                  SC_DEVANAGARI, SC_CYRILLIC, SC_GREEK };
@@ -574,7 +572,7 @@ void font_register_webface(const std::string& family, int weight, bool italic,
   /* keep only bytes stb_truetype can actually open (ttf/otf) */
   if (data.size() < 12) return;
   if (stbtt_GetFontOffsetForIndex(data.data(), 0) < 0) {
-    engine_log(2, "[font] @font-face '%s': not a ttf/otf (woff2?) — skipped", family.c_str());
+    engine_log(2, "[font] @font-face '%s': not a ttf/otf (woff2?), skipped", family.c_str());
     return;
   }
   std::lock_guard<std::mutex> lk(g_font_mtx);
@@ -663,7 +661,7 @@ have_src:
     return nullptr;
   }
   fe->size = size_px;
-  /* CSS font-size is the EM size — ScaleForMappingEmToPixels maps em→px.
+  /* CSS font-size is the EM size, ScaleForMappingEmToPixels maps em to px.
    * (ScaleForPixelHeight scales by ascent+descent, rendering Inter ~25% small.) */
   fe->scale = stbtt_ScaleForMappingEmToPixels(info, size_px);
   int ascent, descent, gap;

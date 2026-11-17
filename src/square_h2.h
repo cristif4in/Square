@@ -1,11 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_h2.h
- *  Real HTTP/2 (RFC 7540/7541) client: ALPN-negotiated, connection
- *  preface, SETTINGS, HEADERS/DATA framing, flow control, HPACK with
- *  static+dynamic tables and Huffman coding (RFC 7541 Appendix B).
- *  Single active stream per connection (browser fetches are sequential);
- *  pushes are refused; connection + stream windows are kept open.
- * ===================================================================== */
+/* Real HTTP/2 (RFC 7540/7541) client: ALPN-negotiated, connection, preface, SETTINGS, HEADERS/DATA framing, flow control, HPACK with, static+dynamic tables and Huffman coding (RFC 7541 Appendix B). Single active stream per connection (browser fetches are sequential);, pushes are refused; connection + stream windows are kept open */
 #pragma once
 
 #include "square_internal.h"

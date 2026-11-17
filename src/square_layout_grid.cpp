@@ -1,8 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_layout_grid.cpp
- *  Grid layout: track resolution (px/pct/fr/minmax/auto-fit), item
- *  auto-placement, span handling and row sizing.
- * ===================================================================== */
+/* Grid layout: track resolution (px/pct/fr/minmax/auto-fit), item, auto-placement, span handling and row sizing */
 #include "square_layout_internal.h"
 
 #include <algorithm>
@@ -11,7 +7,6 @@
 
 namespace sqrl {
 
-/* ============================ grid layout ============================ */
 /* subgrid axis inheritance: when a grid item declares `grid-template-columns:
  * subgrid` (or rows: subgrid), its track list is a single TR_SUBGRID sentinel.
  * The actual track sizes are the parent grid's resolved track sizes for the

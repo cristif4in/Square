@@ -1,8 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_style.cpp
- *  CSS value parsing (lengths, calc, colors, gradients), declaration
- *  application (apply_declaration) and the cascade (style_tree).
- * ===================================================================== */
+/* CSS value parsing (lengths, calc, colors, gradients), declaration, application (apply_declaration) and the cascade (style_tree) */
 #include "square_content_internal.h"
 #include "square_style_internal.h"
 
@@ -21,7 +17,7 @@ static std::atomic<bool> g_any_transitions{false};
 static double g_starting_until = -1;
 bool css_starting_active() { return g_any_transitions && anim_time_s() < g_starting_until; }
 
-/* scroll-driven animation context — populated by style_reanimate() from the
+/* scroll-driven animation context, populated by style_reanimate() from the
  * instance's current scroll position and page height. Thread-local so the
  * deep evaluate_animation() recursion can read it without an extra parameter. */
 struct AnimScrollCtx {
@@ -262,7 +258,7 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     };
     if (prop == "border") {
       for (int s = 0; s < 4; s++) apply_side(s);
-      if (cs->border_style[0] == 0 && toks.size() >= 2) { /* style missing → still none */ }
+      if (cs->border_style[0] == 0 && toks.size() >= 2) { /* style missing to still none */ }
     } else if (side == -2) { /* border-inline: start + end */
       apply_side(3);
       apply_side(1);
@@ -586,7 +582,7 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
        * accept and map start/center/end to the block-axis field as approximation */
       if (!toks.empty()) map_align(toks[0]);
     } else {
-      /* place-items: <align-items> [/ <justify-items>] — block-axis part drives layout */
+      /* place-items: <align-items> [/ <justify-items>], block-axis part drives layout */
       if (!toks.empty()) map_align(toks[0]);
     }
     return true;
@@ -632,7 +628,7 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     if (!toks.empty()) cs->flex_grow = (float)atof(toks[0].c_str());
     if (toks.size() > 1) cs->flex_shrink = (float)atof(toks[1].c_str());
     if (toks.size() > 2) parse_length(substitute_vars(toks[2], rc), &cs->flex_basis, rc);
-    else cs->flex_basis.unit = L_PCT, cs->flex_basis.val = 0; /* flex:1 → basis 0% */
+    else cs->flex_basis.unit = L_PCT, cs->flex_basis.val = 0; /* flex:1 to basis 0% */
     return true;
   }
   if (prop == "flex-grow") { cs->flex_grow = (float)atof(v.c_str()); return true; }
@@ -809,7 +805,7 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
   }
   if (prop == "animation-timeline") {
     /* accepted forms: "auto" (default), "none", "scroll()", "scroll(nearest/root)",
-     * "view()", "view(nearest/root)" — we record the kind; the actual timeline
+     * "view()", "view(nearest/root)", we record the kind; the actual timeline
      * progress is computed during reanimate. */
     std::string s = lc(trim(v));
     cs->anim_timeline_kind = 0;
@@ -1310,7 +1306,6 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
   return false;
 }
 
-/* ============================ cascade ============================ */
 struct UaSheet {
   StyleSheet sheet;
   UaSheet() {
@@ -1424,7 +1419,7 @@ struct MatchedRule {
  * The index is rebuilt whenever the stylesheet changes (style_tree() at
  * the top of each restyle). Building it is O(rules × selectors) which is
  * the same cost as a single collect pass, so it pays for itself after one
- * element's worth of cascade work — and there are always many elements. */
+ * element's worth of cascade work, and there are always many elements. */
 struct RuleIndex {
   /* tag -> list of rule* + selector* (pointers into the stylesheet, which
    * must outlive the index). Stable as long as the StyleSheet's rules
@@ -1435,7 +1430,7 @@ struct RuleIndex {
   /* the sheet this index was built from; collect_rules_for compares the
    * sheet pointer it was given against this to know whether to use the
    * index or fall back to the linear scan. UA sheet (a different object)
-   * thus falls back to linear scan, which is fine — it's tiny. */
+   * thus falls back to linear scan, which is fine, it's tiny. */
   const StyleSheet* source = nullptr;
   bool built = false;
 };
@@ -1468,7 +1463,7 @@ static void build_rule_index(const StyleSheet& sheet) {
  * by the previous layout pass) or nullptr when no eligible container exists.
  *
  * The spec query context for an element's own @container rules is the nearest
- * *ancestor* container, not the element itself — so we skip el and start at
+ * *ancestor* container, not the element itself, so we skip el and start at
  * el->parent. */
 static const ComputedStyle* find_container_for(const Node* el, const std::string& name_filter) {
   for (const Node* p = el->parent; p; p = p->parent) {
@@ -1632,7 +1627,6 @@ void style_subtree(Document* doc, Node* root, int vw, int vh) {
   compute_style_for(root, parent_cs, &doc->root_vars, doc->sheet, doc->root_font_size, vw, vh);
 }
 
-/* ---- animation evaluation ---- */
 static float anim_time_s() {
   using clock = std::chrono::steady_clock;
   static clock::time_point base = clock::now();
@@ -1794,7 +1788,6 @@ static void evaluate_animation(ComputedStyle* cs, const StyleSheet& sheet, Resol
   }
 }
 
-/* ---- CSS transitions ---- */
 struct TransVal {
   float from = 0, to = 0;                 /* opacity */
   Color c_from{}, c_to{};                 /* color / background-color */
@@ -1978,7 +1971,7 @@ static void compute_style_for(Node* el, const ComputedStyle* parent, const Custo
   CustomProps own_vars;
   if (parent_vars) own_vars = *parent_vars;
 
-  /* inline style attr: highest priority — parse as declarations applied last */
+  /* inline style attr: highest priority, parse as declarations applied last */
   std::vector<Declaration> inline_decls;
   if (el->type == N_ELEMENT) {
     const std::string* style_attr = el->attr("style");
@@ -2032,7 +2025,7 @@ static void compute_style_for(Node* el, const ComputedStyle* parent, const Custo
     apply_declaration(cs, *p.prop, *p.val, rc, &own_vars);
   }
 
-  /* UA rules (lowest priority — apply first conceptually; emulate by filling gaps) */
+  /* UA rules (lowest priority, apply first conceptually; emulate by filling gaps) */
   {
     std::vector<MatchedRule> uam;
     collect_rules_for(el, ua_sheet().sheet, &uam);

@@ -1,8 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_platform_api.cpp
- *  Remaining JS bindings, the public C API (square_create / load / save /
- *  input & hit testing) and the page thread. Split from square_platform.cpp.
- * ===================================================================== */
+/* Remaining JS bindings, the public C API (square_create / load / save /, input & hit testing) and the page thread. Split from square_platform.cpp */
 #include "square_platform_internal.h"
 #include "square_content_internal.h" /* lc/trim */
 
@@ -176,7 +172,7 @@ JSValue js_start_view_transition(JSContext* ctx, JSValueConst, int argc, JSValue
    * settles) by the platform's view-transition paint hook. We expose a tiny
    * shim object so JS code can chain .finished etc. */
   JSValue vtObj = JS_NewObject(ctx);
-  /* ready/finished resolve immediately in this simplified implementation —
+  /* ready/finished resolve immediately in this simplified implementation,
    * the actual crossfade animation is driven by the paint loop reading
    * g_vt_state, not by these promises. */
   JSValue ready_promise = JS_Eval(ctx, "Promise.resolve()", 17, "<ready>", JS_EVAL_TYPE_GLOBAL);
@@ -293,7 +289,6 @@ JSValue js_fetch_start(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
   return JS_UNDEFINED;
 }
 
-/* ============================ public C API ============================ */
 
 } /* namespace sqrl */
 
@@ -519,7 +514,7 @@ static void page_thread_entry(Instance* inst, std::string url, bool as_html) {
       }
     }
     if (next.empty()) break;
-    /* guard: a page that hard-reloads itself endlessly (broken polyfill) —
+    /* guard: a page that hard-reloads itself endlessly (broken polyfill),
      * allow at most 2 consecutive same-URL hops */
     if (next == cur) {
       inst->same_url_hops++;
@@ -581,7 +576,7 @@ static void page_thread_entry(Instance* inst, std::string url, bool as_html) {
 
 static void navigate_begin(Instance* inst, const std::function<void()>& start) {
   /* Runs on a throwaway thread: signal the old page to exit, join it, then
-   * start the new page thread. The CALLING (UI) thread never blocks — joining
+   * start the new page thread. The CALLING (UI) thread never blocks, joining
    * here used to freeze the whole browser whenever a page was slow to stop. */
   std::thread([inst, start]() {
     if (inst->nav_busy.exchange(true)) return; /* a navigation is already in flight */
@@ -629,7 +624,6 @@ void square_load_url(square_instance* p, const char* url) {
   });
 }
 
-/* ============================ input / hit testing ============================ */
 namespace sqrl { Node* g_hover_node = nullptr; } /* :hover target (declared in square_internal.h) */
 namespace sqrl { Node* g_focus_node = nullptr; } /* :focus target */
 using sqrl::g_hover_node;
@@ -742,13 +736,13 @@ SQRL_API void square_send_mouse_leave(square_instance* p) {
   }
 }
 
-/* ev.preventDefault() — sets defaultPrevented on the event object (this) */
+/* ev.preventDefault(), sets defaultPrevented on the event object (this) */
 namespace sqrl {
 static JSValue js_ev_prevent_default(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
   JS_SetPropertyStr(ctx, this_val, "defaultPrevented", JS_TRUE);
   return JS_UNDEFINED;
 }
-/* ev.stopPropagation() — marks the event so the bubbling loop stops */
+/* ev.stopPropagation(), marks the event so the bubbling loop stops */
 static JSValue js_ev_stop_propagation(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
   JS_SetPropertyStr(ctx, this_val, "_propagationStopped", JS_TRUE);
   return JS_UNDEFINED;
@@ -1017,7 +1011,7 @@ int square_get_page_size(square_instance* p, int* out_w, int* out_h) {
 }
 
 /* repaint at a given scroll offset (shared by set_scroll and scrollbar drag).
- * Fast path: blit-scroll — shift the already-rendered content and repaint only
+ * Fast path: blit-scroll, shift the already-rendered content and repaint only
  * the exposed strip instead of rasterizing the whole page on every scroll. */
 static void apply_scroll(Instance* inst, int y) {
   std::lock_guard<std::mutex> doclk(inst->doc_mtx);

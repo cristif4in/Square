@@ -1,8 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_layout_inline.cpp
- *  Inline layout: InlineItem flattening, replaced items in inline flow,
- *  line breaking and fragment emission.
- * ===================================================================== */
+/* Inline layout: InlineItem flattening, replaced items in inline flow, line breaking and fragment emission */
 #include "square_layout_internal.h"
 
 #include <algorithm>
@@ -10,7 +6,6 @@
 
 namespace sqrl {
 
-/* ============================ inline items ============================ */
 static void measure_text_item(InlineItem* it, const ComputedStyle* cs, LayoutCtx& lc) {
   void* f = font_for(cs);
   it->run.font = f;
@@ -220,7 +215,6 @@ void flatten_nodes(const std::vector<Node*>& nodes, const ComputedStyle* cs,
   }
 }
 
-/* ============================ replaced layout (in inline flow) ============================ */
 static float layout_replaced_item(InlineItem* it, LayoutCtx& lc, float avail_w) {
   Node* el = it->node;
   ComputedStyle* cs = el->cs;
@@ -277,7 +271,6 @@ static float layout_replaced_item(InlineItem* it, LayoutCtx& lc, float avail_w) 
   return w;
 }
 
-/* ============================ inline layout core ============================ */
 static void emit_line(Box* container, std::vector<InlineItem>& seq, size_t start, size_t end,
                       float x_start, float line_w, float ascent, float descent, float y_line_top,
                       LayoutCtx& lc) {

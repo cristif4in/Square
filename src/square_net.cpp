@@ -1,9 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_net.cpp
- *  HTTP/1.1 client (keep-alive-less), TLS via OpenSSL (POSIX) or
- *  Schannel (Windows), gzip/zlib/deflate decoding, RFC3986 URL utils,
- *  data: URLs, cookies, worker thread pool.
- * ===================================================================== */
+/* HTTP/1.1 client (keep-alive-less), TLS via OpenSSL (POSIX) or, Schannel (Windows), gzip/zlib/deflate decoding, RFC3986 URL utils, data: URLs, cookies, worker thread pool */
 #include "square_internal.h"
 
 #include <chrono>
@@ -113,7 +108,6 @@ void ThreadPool::drain() {
   impl_ = nullptr;
 }
 
-/* ============================ string utils ============================ */
 static std::string lower_copy(std::string s) {
   for (auto& c : s) c = (char)tolower((unsigned char)c);
   return s;
@@ -131,7 +125,6 @@ static std::string trim_copy(const std::string& s) {
   return s.substr(a, b - a);
 }
 
-/* ============================ URL utils ============================ */
 bool url_split(const std::string& url, std::string* scheme, std::string* host,
                std::string* port, std::string* path_query) {
   size_t p = url.find("://");
@@ -140,7 +133,7 @@ bool url_split(const std::string& url, std::string* scheme, std::string* host,
   size_t hp = p + 3, e = hp;
   while (e < url.size() && url[e] != '/' && url[e] != '?' && url[e] != '#') e++;
   std::string hostport = url.substr(hp, e - hp);
-  /* file:///path has no host — that is valid */
+  /* file:///path has no host, that is valid */
   if (sch == "file") {
     /* hostport may be "" (file:///path) or "localhost" */
     std::string h = hostport, po;
@@ -251,7 +244,6 @@ std::string url_resolve(const std::string& base, const std::string& rel) {
   return out;
 }
 
-/* ============================ codecs ============================ */
 static int b64val(char c) {
   if (c >= 'A' && c <= 'Z') return c - 'A';
   if (c >= 'a' && c <= 'z') return c - 'a' + 26;
@@ -346,7 +338,6 @@ bool gzip_inflate(const uint8_t* in, size_t n, std::vector<uint8_t>* out) {
   return false;
 }
 
-/* ============================ cookies ============================ */
 void CookieJar::store(const std::string& host, const std::string& set_cookie_value) {
   std::string pair = set_cookie_value;
   size_t semi = pair.find(';');
@@ -374,7 +365,6 @@ std::string CookieJar::get(const std::string& host) const {
   return out;
 }
 
-/* ============================ sockets ============================ */
 struct TcpSocket {
   int fd = -1;
   ~TcpSocket() { close_fd(); }
@@ -453,7 +443,7 @@ static int tcp_connect_timeout(const std::string& host, const std::string& port,
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
 #ifdef _WIN32
-    /* NOTE: do NOT set SO_RCVTIMEO on Windows — on some systems (LSP/AV
+    /* NOTE: do NOT set SO_RCVTIMEO on Windows, on some systems (LSP/AV
      * interference) timed recv() fails instantly with WSAETIMEDOUT. Read
      * timeouts are implemented with select() before each recv instead. */
     (void)tv;
@@ -482,7 +472,6 @@ static bool send_all(int fd, const char* data, size_t n) {
   return true;
 }
 
-/* ============================ HTTP/1.1 over a stream ============================ */
 struct StreamOps {
   /* return: >0 bytes read, 0 = eof, <0 error */
   std::function<int(char*, size_t)> read;
@@ -598,7 +587,6 @@ static bool read_http_response(StreamOps& io, HttpResult* res, const std::atomic
   return true;
 }
 
-/* ============================ TLS: OpenSSL ============================ */
 #ifndef _WIN32
 struct TlsSession {
   SSL_CTX* ctx = nullptr;
@@ -683,7 +671,6 @@ static bool https_session(TcpSocket& sock, const std::string& host, int timeout_
 }
 #endif /* !_WIN32 */
 
-/* ============================ Schannel (Windows) ============================ */
 #ifdef _WIN32
 /* A compact TLS-over-socket stream using Schannel with in-memory buffering. */
 struct SchannelStream {
@@ -721,7 +708,7 @@ struct SchannelStream {
     std::string hostn = host;
     /* first InitializeSecurityContext call: NO input token (we start the
      * handshake). Passing the hostname as a SECBUFFER_TOKEN would send those
-     * raw bytes to the server instead of a ClientHello → handshake failure. */
+     * raw bytes to the server instead of a ClientHello to handshake failure. */
     SecBuffer out0[1];
     out0[0].BufferType = SECBUFFER_TOKEN;
     out0[0].cbBuffer = 0;
@@ -779,7 +766,7 @@ struct SchannelStream {
         return false;
       }
       /* consumed bytes: EXTRA is the number of UNPROCESSED bytes at the END
-       * of the input — keep those, drop everything before them */
+       * of the input, keep those, drop everything before them */
       if (in[1].BufferType == SECBUFFER_EXTRA && in[1].cbBuffer)
         cipher.erase(0, cipher.size() - in[1].cbBuffer);
       else
@@ -932,7 +919,6 @@ struct SchannelStream {
 };
 #endif /* _WIN32 */
 
-/* ============================ HTTP/2 (RFC 7540/7541) ============================ */
 static const char* kDefaultUA =
     "Square/1.0 (cristif4in)";
 
@@ -1180,7 +1166,6 @@ done:
 }
 #endif /* !_WIN32 */
 
-/* ============================ net_http_get ============================ */
 
 HttpResult net_http_get(const std::string& url, const std::vector<HttpHeader>& extra_headers,
                         const std::string& method, int timeout_ms, CookieJar* jar,
@@ -1243,7 +1228,7 @@ HttpResult net_http_get(const std::string& url, const std::vector<HttpHeader>& e
           fprintf(stderr, "[h2] negotiated=%d ran=%d err='%s' status=%d size=%zu\n",
                   (int)h2_ok_flag, (int)h2ran, out.err.c_str(), res.status, res.body.size());
         if (!h2ran) {
-          /* h2 failed at the protocol level — retry once over HTTP/1.1 */
+          /* h2 failed at the protocol level, retry once over HTTP/1.1 */
           delete tls;
           sock.close_fd(); /* close the h2 connection's raw socket */
           sock.fd = tcp_connect_timeout(host, port, timeout_ms, &out.err);

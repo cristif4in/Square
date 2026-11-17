@@ -1,3 +1,4 @@
+/* JS runtime: QuickJS wiring, module loader, DOM/Web API prelude, event loop */
 #include "square_platform_internal.h"
 
 #include <algorithm>
@@ -18,14 +19,10 @@
 #include <unistd.h>
 #endif
 
-/* =====================================================================
- *  Square Browser Engine — square_platform.cpp (part 2: JS runtime,
- *  prelude, event loop)
- * ===================================================================== */
+/* Prelude, event loop) */
 
 namespace sqrl {
 
-/* ============================ module loader ============================ */
 
 char* module_normalize(JSContext* ctx, const char* base_name, const char* name, void* opaque) {
   Instance* inst = (Instance*)opaque;
@@ -45,26 +42,10 @@ char* module_normalize(JSContext* ctx, const char* base_name, const char* name, 
 }
 
 static std::unordered_map<std::string, std::string> g_module_cache;
-/* baseline-interpreter improvement: cache compiled module bytecode. The first
- * time a module URL is fetched, we compile its source with JS_Eval
- * (JS_EVAL_FLAG_COMPILE_ONLY) and serialize the resulting function object to
- * a flat byte buffer via JS_WriteObject. On subsequent loads (page reloads,
- * re-imports, back navigation) we skip both parsing AND compilation and
- * hydrate the module directly from the cached bytecode with JS_ReadObject.
- *
- * QuickJS's interpreter is already direct-dispatch (computed goto), so the
- * "baseline interpreter" perf headroom is in *how fast we hand it code*.
- * Parsing+compiling a 200 KB React vendor bundle takes ~30-60 ms; reading
- * pre-compiled bytecode takes ~1-3 ms. The cache is keyed by URL and a
- * version stamp (QuickJS VERSION + a constant we bump when the loader
- * changes).
- *
- * Sparkplug-style persistent cache: when SQRL_BYTECODE_CACHE_DIR is set,
- * the bytecode blob is also written to disk under
- *   <dir>/<sha1(version+url+src_hash)>.sqbc
- * and reloaded on subsequent process runs. This is the JS-engine analog of
- * JavaScriptCore's Sparkplug tier — a non-optimising compilation pass that
- * runs once per source and is reused across cold process starts. */
+/* module bytecode cache: keyed by URL + a version tag; the disk cache is
+ * written via temp+rename so a crash doesn't leave a corrupt .sqbc
+ * (parse+compile of a 200 KB bundle costs ~30-60 ms, reading cached
+ * bytecode ~1-3 ms). */
 static std::unordered_map<std::string, std::vector<uint8_t>> g_module_bytecode;
 static std::mutex g_bytecode_mtx;
 static const char* k_bytecode_version_tag = "sqbc1";
@@ -77,15 +58,8 @@ void js_module_cache_clear() {
   g_module_bytecode.clear();
 }
 
-/* Sparkplug-style persistent bytecode cache. The dir is taken from
- * SQRL_BYTECODE_CACHE_DIR; if unset, persistent caching is disabled and
- * only the in-memory cache (g_module_bytecode) is used. Files are named
- *   <sha1 hex>.sqbc
- * where the sha1 covers: version tag + URL + first 4 KB of source (so a
- * different script at the same URL gets a different cache entry, and a
- * version bump invalidates everything). We use a tiny self-contained sha1
- * (FIPS-180-1 reference implementation) so we don't take an openssl
- * dependency for the cache. */
+/* disk cache: dir from SQRL_BYTECODE_CACHE_DIR, file <sha1(version+URL+first 4 KB of source)>.sqbc;
+ * self-contained sha1 avoids an openssl dependency. */
 static void sha1_bytes(const uint8_t* m, size_t n, uint8_t out[20]) {
   uint32_t h0 = 0x67452301, h1 = 0xEFCDAB89, h2 = 0x98BADCFE, h3 = 0x10325476, h4 = 0xC3D2E1F0;
   uint64_t bits = (uint64_t)n * 8;
@@ -223,9 +197,7 @@ JSModuleDef* module_loader(JSContext* ctx, const char* module_name, void* opaque
     auto it = g_module_bytecode.find(url);
     if (it != g_module_bytecode.end()) cached_bc = it->second;
   }
-  /* Sparkplug-style: also check the persistent disk cache when the env var
-   * SQRL_BYTECODE_CACHE_DIR points at a writable directory. On a hit, we
-   * populate the in-memory cache too so subsequent reads skip the disk. */
+  /* persistent disk cache: on a hit, populate the in-memory cache too */
   if (cached_bc.empty()) {
     std::vector<uint8_t> disk_bc;
     if (sparkplug_disk_load(url, code, &disk_bc) && !disk_bc.empty() &&
@@ -237,7 +209,7 @@ JSModuleDef* module_loader(JSContext* ctx, const char* module_name, void* opaque
   }
   if (!cached_bc.empty() && cached_bc.size() >= 6 &&
       memcmp(cached_bc.data(), k_bytecode_version_tag, 5) == 0) {
-    /* tag matches — hydrate directly from bytecode, skipping the parser
+    /* tag matches, hydrate directly from bytecode, skipping the parser
      * and the bytecode compiler. JS_ReadObject with JS_READ_OBJ_BYTECODE
      * returns the module function object ready for JS_EvalFunction. */
     const uint8_t* body = cached_bc.data() + 5;
@@ -245,7 +217,7 @@ JSModuleDef* module_loader(JSContext* ctx, const char* module_name, void* opaque
     func = JS_ReadObject(ctx, body, body_len, JS_READ_OBJ_BYTECODE);
     if (JS_IsException(func)) {
       /* bytecode was incompatible (e.g. QuickJS minor version changed at
-       * runtime) — fall through to recompile from source. */
+       * runtime), fall through to recompile from source. */
       func = JS_NULL;
     }
   } else {
@@ -280,7 +252,6 @@ JSModuleDef* module_loader(JSContext* ctx, const char* module_name, void* opaque
   return m;
 }
 
-/* ============================ JS prelude (DOM API in JS) ============================ */
 const char* ctx_doc_key = "__document__";
 
 const char* k_js_prelude = R"PRELUDE(
@@ -878,7 +849,7 @@ class SQDocument extends SQNode {
 class SQLocation {
   constructor(href) {
     const m = /^([a-z]+):\/\/([^\/?#]+)([^?#]*)(\?[^#]*)?(#.*)?$/.exec(href) || [null, 'https:', '', '/', '', ''];
-    /* internal _href — assigning this.href would recurse into the setter */
+    /* internal _href, assigning this.href would recurse into the setter */
     this._href = href;
     this.protocol = m[1] === 'file' ? 'file:' : m[1] + ':';
     this.host = m[2];
@@ -1697,7 +1668,6 @@ globalThis.__sqDispatch = function(node, ev) {
   return r;
 };
 
-/* ---- additional standard globals (YouTube / Polymer / analytics) ---- */
 globalThis.NodeFilter = {
   SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 0x1, SHOW_ATTRIBUTE: 0x2, SHOW_TEXT: 0x4,
   SHOW_CDATA_SECTION: 0x8, SHOW_COMMENT: 0x80, SHOW_DOCUMENT: 0x100,
@@ -1716,7 +1686,7 @@ globalThis.Node = globalThis.Node || __NodeC;
 try { for (const k in __NodeC) { if (globalThis.Node[k] === undefined) globalThis.Node[k] = __NodeC[k]; } } catch (e) {}
 
 /* custom elements registry: registered classes upgrade matching elements.
- * Stamping mirrors the constructor contract — if the class exposes a
+ * Stamping mirrors the constructor contract, if the class exposes a
  * template (static or prototype getter) and the element carries no
  * server-rendered children, the template content is cloned into it. */
 globalThis.customElements = globalThis.customElements || (function () {
@@ -1890,7 +1860,6 @@ globalThis.Range = globalThis.Range || function () {
   this.getClientRects = function () { return { length: 0, item: function () { return null; } }; };
 };
 globalThis.__sqListenersKey = listenerKey;
-/* ---- Shadow DOM (API-level: shadow trees live JS-side and are not painted) ---- */
 class SQShadowRoot extends SQFragment {
   constructor(host, mode) {
     super();
@@ -1912,7 +1881,6 @@ class SQShadowRoot extends SQFragment {
 globalThis.ShadowRoot = SQShadowRoot;
 globalThis.DocumentFragment = globalThis.DocumentFragment || SQFragment;
 
-/* ---- ReadableStream: pull-style reader over produced chunks ---- */
 class SQReadableStream {
   constructor(start) {
     this._chunks = [];
@@ -2000,7 +1968,6 @@ globalThis.ReadableStream = SQReadableStream;
 
 )PRELUDE";
 
-/* ============================ JS console / error reporting ============================ */
 JSValue js_console_log(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
   Instance* inst = (Instance*)JS_GetContextOpaque(ctx);
   std::string out;
@@ -2051,7 +2018,6 @@ void report_js_exception(Instance* inst) {
   JS_FreeValue(ctx, exc);
 }
 
-/* ============================ timers / loop helpers ============================ */
 static void fire_timer(Instance* inst, Timer& t) {
   JSContext* ctx = inst->jctx;
   if (!JS_IsFunction(ctx, t.fn)) return;

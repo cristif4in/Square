@@ -1,9 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_platform.cpp
- *  Engine instance, load pipeline, threading, QuickJS + DOM/Web API,
- *  event loop, painting orchestration.
- *  (public C API + input handling live in square_platform_api.cpp)
- * ===================================================================== */
+/* Engine instance, load pipeline, threading, QuickJS + DOM/Web API, event loop, painting orchestration */
 #include "square_platform_internal.h"
 #include "square_layout_internal.h"
 
@@ -30,7 +25,6 @@ std::string plat_lc(std::string s) {
   return s;
 }
 
-/* ============================ engine_log ============================ */
 std::mutex g_log_mtx;
 square_log_fn g_log_fn = nullptr;
 void* g_log_ud = nullptr;
@@ -51,7 +45,6 @@ double now_ms() {
       .count();
 }
 
-/* ============================ file/http helpers ============================ */
 static bool read_file_bytes(const std::string& path, std::vector<uint8_t>* out) {
   FILE* f = fopen(path.c_str(), "rb");
   if (!f) return false;
@@ -546,7 +539,7 @@ HttpResult fetch_sync(Instance* inst, const std::string& url, const char* dest) 
   hdrs.push_back({"Upgrade-Insecure-Requests", "1"});
 
   /* fetch with retry: CDN rate-limit block pages are transient.
-   * NOTE: do NOT treat "<!doctype html>" as a block signature — every real
+   * NOTE: do NOT treat "<!doctype html>" as a block signature, every real
    * HTML document starts with one and that caused 4x retries on success. */
   auto looks_blocked = [](const HttpResult& rr) {
     if (!rr.ok) return false;
@@ -587,7 +580,6 @@ HttpResult fetch_sync(Instance* inst, const std::string& url, const char* dest) 
   }
   return r;
 }
-/* ============================ iframe cache ============================ */
 static std::mutex g_iframe_mtx;
 static std::unordered_map<std::string, IframeData*> g_iframes;
 
@@ -639,7 +631,6 @@ Surface* iframe_render(const std::string& url, int w, int h) {
   return &d->frame;
 }
 
-/* ============================ style/layout/paint refresh ============================ */
 static void paint_current_frame(Instance* inst, int vw, int vh) {
   inst->page_h = inst->root_box ? (int)layout_page_height(inst->root_box) : vh;
   int scroll_max = inst->page_h - vh;
@@ -753,7 +744,6 @@ void refresh_page(Instance* inst) {
   inst->dirty = false;
 }
 
-/* ============================ page thread ============================ */
 static void set_state(Instance* inst, int st, float progress, const char* info) {
   inst->state = st;
   if (inst->state_fn) inst->state_fn(inst->state_ud, st, progress, info ? info : "");
@@ -1041,7 +1031,7 @@ void page_main(Instance* inst, std::string url) {
   inst->rt = JS_NewRuntime();
   if (inst->rt) {
     /* baseline interpreter improvements: tuned GC + memory settings.
-     * - memory limit: 512 MB (was 512 MB — kept, the default would be
+     * - memory limit: 512 MB (was 512 MB, kept, the default would be
      *   unlimited which leads to OOM on long-running pages with leaks).
      * - GC threshold: lowered from the QuickJS default (~256 KB) to 8 MB
      *   so minor GCs run less often on hot pages (each GC pauses the
@@ -1049,7 +1039,7 @@ void page_main(Instance* inst, std::string url) {
      *   React/class-component render passes typically allocate 5-15 MB
      *   of short-lived objects that get freed in one sweep rather than
      *   triggering many small GCs mid-render.
-     * - max stack: 4 MB (was 2 MB) — deep React call chains were hitting
+     * - max stack: 4 MB (was 2 MB), deep React call chains were hitting
      *   the previous limit on complex component trees. */
     JS_SetMemoryLimit(inst->rt, 512 * 1024 * 1024);
     JS_SetGCThreshold(inst->rt, 8 * 1024 * 1024);
@@ -1246,7 +1236,7 @@ void page_main(Instance* inst, std::string url) {
       JS_FreeValue(inst->jctx, fp);
     }
 
-    /* scripts in DOCUMENT ORDER (inline and external interleaved) —
+    /* scripts in DOCUMENT ORDER (inline and external interleaved),
      * order-dependent pages (e.g. slowAES bot checks) require this */
     struct ScriptEntry {
       bool external;
@@ -1267,7 +1257,7 @@ void page_main(Instance* inst, std::string url) {
           if (src && !src->empty()) {
             /* Cloudflare Rocket Loader only re-orders script execution; we
              * already execute in document order, and its fallback reload-loops
-             * on DOMs it can't instrument — skip it. */
+             * on DOMs it can't instrument, skip it. */
             if (src->find("rocket-loader") != std::string::npos) {
               engine_log(1, "[script] skipped (rocket loader): %s", src->c_str());
               return;
@@ -1304,7 +1294,7 @@ void page_main(Instance* inst, std::string url) {
         }
         code.assign(r.body.begin(), r.body.end());
         /* refuse HTML served as script (challenge/block pages). Only trust the
-         * leading bytes / Content-Type — big bundles legitimately contain
+         * leading bytes / Content-Type, big bundles legitimately contain
          * "<body" inside template strings, so never scan the whole body. */
         ctype = r.header("Content-Type");
         bool looks_html = false;
@@ -1435,7 +1425,7 @@ js_done:;
         inst->dirty = true; /* other changes pending: full refresh */
       }
     }
-    /* navigation request? (link click) → leave this page; the request stays
+    /* navigation request? (link click) to leave this page; the request stays
      * queued for page_thread_entry to pick up */
     {
       std::lock_guard<std::mutex> nlk(inst->nav_mtx);

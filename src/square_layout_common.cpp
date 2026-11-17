@@ -1,8 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_layout_common.cpp
- *  Shared layout helpers: length resolution, style predicates, fonts,
- *  intrinsic sizing, box edges, shrink-to-fit measurement, box tree utils.
- * ===================================================================== */
+/* Shared layout helpers: length resolution, style predicates, fonts, intrinsic sizing, box edges, shrink-to-fit measurement, box tree utils */
 #include "square_layout_internal.h"
 
 #include <algorithm>
@@ -10,7 +6,6 @@
 
 namespace sqrl {
 
-/* ============================ length resolution ============================ */
 float res_l(const Length& L, float pct_basis, float em, LayoutCtx& lc) {
   switch (L.unit) {
     case L_AUTO:
@@ -91,7 +86,6 @@ float res_l(const Length& L, float pct_basis, float em, LayoutCtx& lc) {
   return L.val;
 }
 
-/* ============================ style predicates ============================ */
 bool is_blocky(Display d) {
   return d == D_BLOCK || d == D_FLEX || d == D_GRID || d == D_TABLE || d == D_LIST_ITEM ||
          d == D_TABLE_ROW || d == D_TABLE_CELL || d == D_TABLE_ROW_GROUP;
@@ -101,7 +95,6 @@ bool node_invisible(const ComputedStyle* cs) {
   return !cs || cs->display == D_NONE || cs->visibility_hidden;
 }
 
-/* ============================ fonts / text ============================ */
 void* font_for(const ComputedStyle* cs) {
   std::vector<std::string> fams = cs->font_family;
   if (fams.empty()) fams = {"Inter"};
@@ -141,7 +134,6 @@ std::string transform_text(const std::string& in, TextTransform tt) {
   return out;
 }
 
-/* ============================ box creation ============================ */
 Box* new_box(Node* n, Box* parent) {
   Box* b = new Box();
   b->node = n;
@@ -151,7 +143,6 @@ Box* new_box(Node* n, Box* parent) {
   return b;
 }
 
-/* ============================ replaced elements ============================ */
 void replaced_intrinsic(Node* el, LayoutCtx& lc, float* w, float* h) {
   const std::string* wattr = el->attr("width");
   const std::string* hattr = el->attr("height");
@@ -232,7 +223,6 @@ void replaced_intrinsic(Node* el, LayoutCtx& lc, float* w, float* h) {
   *h = ah;
 }
 
-/* ============================ measurement ============================ */
 static float measure_text_width(Node* tn, const ComputedStyle* cs, LayoutCtx& lc) {
   (void)lc;
   const std::string txt = transform_text(tn->data, cs->text_transform);
@@ -326,7 +316,7 @@ float measure_max_content_width(Node* el, LayoutCtx& lc) {
     }
   }
   float base = has_inline ? inline_total : max_child;
-  /* flex containers space their items with column-gap — max-content must
+  /* flex containers space their items with column-gap, max-content must
    * include it or buttons shrink-wrap and their text wraps */
   if (cs->display == D_FLEX || cs->display == D_INLINE_FLEX) {
     int n_items = 0;
@@ -355,7 +345,7 @@ float measure_max_content_width(Node* el, LayoutCtx& lc) {
  * Used as the flex-shrink floor (CSS min-width:auto on flex items). */
 static float measure_text_min_width(Node* t, ComputedStyle* cs, LayoutCtx& lc) {
   const std::string& s = t->data;
-  /* white-space:nowrap — the smallest the text can get is the whole line */
+  /* white-space:nowrap, the smallest the text can get is the whole line */
   if (cs->white_space == WS_NOWRAP) {
     void* f = font_for(cs);
     return f ? font_measure_text(f, s.c_str(), cs->letter_spacing, cs->word_spacing) : 0;
@@ -429,7 +419,6 @@ float measure_min_content_width(Node* el, LayoutCtx& lc) {
   return worst;
 }
 
-/* ============================ box edges ============================ */
 void resolve_box_edges(Box* b, const ComputedStyle* cs, float cw_basis, LayoutCtx& lc) {
   float em = cs->font_size;
   b->pad_t = res_l(cs->padding[0], cw_basis, em, lc);
@@ -442,7 +431,6 @@ void resolve_box_edges(Box* b, const ComputedStyle* cs, float cw_basis, LayoutCt
   b->bor_l = cs->border_style[3] ? res_l(cs->border_width[3], cw_basis, em, lc) : 0;
 }
 
-/* ============================ box tree helpers ============================ */
 void offset_box_recursive(Box* b, float dx, float dy) {
   b->x += dx;
   b->y += dy;

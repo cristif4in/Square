@@ -17,7 +17,6 @@
 
 namespace sqrl {
 
-/* ============================ DOM binding (C level) ============================ */
 JSClassID node_class_id = 0;
 
 typedef struct {

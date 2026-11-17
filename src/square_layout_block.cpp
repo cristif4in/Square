@@ -1,8 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_layout_block.cpp
- *  Block layout, the layout_element() dispatch, out-of-flow (absolute /
- *  fixed) positioning and the document layout entry point.
- * ===================================================================== */
+/* Block layout, the layout_element() dispatch, out-of-flow (absolute /, fixed) positioning and the document layout entry point */
 #include "square_layout_internal.h"
 
 #include <algorithm>
@@ -47,7 +43,6 @@ static std::string format_list_marker(int kind, int num) {
   return ".";
 }
 
-/* ============================ block layout ============================ */
 float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
   ComputedStyle* cs = b->cs;
   float avail_w = b->cw;
@@ -374,7 +369,6 @@ float layout_block_content(Box* b, Node* el, LayoutCtx& lc) {
   return content_h;
 }
 
-/* ============================ multicol ============================ */
 /* Balanced multi-column layout: children are measured at the column width,
  * assigned to columns sequentially (greedy fill of the balanced height),
  * then positioned. Inline runs are wrapped into anonymous boxes. */
@@ -500,15 +494,14 @@ static float layout_block_columns(Box* b, Node* el, LayoutCtx& lc) {
   return b->h;
 }
 
-/* ============================ element dispatch ============================ */
 float layout_element(Box* b, Node* el, LayoutCtx& lc) {
   ComputedStyle* cs = b->cs;
-  /* content-visibility: hidden — the element's box is laid out but its
+  /* content-visibility: hidden, the element's box is laid out but its
    * contents are not (subtree is skipped entirely). The element itself
    * retains its specified size, falling back to contain-intrinsic-size if
    * width/height are auto.
    *
-   * content-visibility: auto — same as hidden when the element is far from
+   * content-visibility: auto, same as hidden when the element is far from
    * the viewport (more than 4 viewport heights below the top of the page);
    * behaves normally otherwise. This is the spec's "rendering is skipped
    * when not relevant to the user". */
@@ -543,7 +536,7 @@ float layout_element(Box* b, Node* el, LayoutCtx& lc) {
   else
     b->ch_definite = 0;
   /* re-layout safety: free + clear previous content (kids/out_of_flow are
-   * owning pointers — clearing without freeing would leak whole subtrees) */
+   * owning pointers, clearing without freeing would leak whole subtrees) */
   for (auto* k : b->kids) free_box_tree(k);
   for (auto* o : b->out_of_flow) free_box_tree(o);
   b->kids.clear();
@@ -577,7 +570,7 @@ float layout_element(Box* b, Node* el, LayoutCtx& lc) {
               : res_l(cs->height, b->cw, cs->font_size, lc);
     }
     if (cs->width.unit != L_AUTO && cs->width.unit != L_NORMAL && !h_from_attr && cs->height.unit == L_AUTO)
-      h = w * ih / iw; /* width set + height auto → keep intrinsic ratio */
+      h = w * ih / iw; /* width set + height auto to keep intrinsic ratio */
     else if (cs->width.unit == L_AUTO && cs->height.unit != L_AUTO && cs->height.unit != L_NORMAL)
       w = h * iw / ih;
     if (cs->width.unit != L_AUTO && cs->height.unit == L_AUTO && cs->aspect_ratio > 0) h = w / cs->aspect_ratio;
@@ -654,7 +647,7 @@ float layout_element(Box* b, Node* el, LayoutCtx& lc) {
  * the DOM tree from `node` to find the nearest element whose anchor_name
  * matches node->cs->position_anchor (or, when position_anchor is empty, the
  * default anchor per the spec is the nearest ancestor that establishes an
- * absolutely-positioned containing block — we approximate by using the
+ * absolutely-positioned containing block, we approximate by using the
  * nearest element with an anchor_name). For each side where anchor_active
  * is set, the resolved px value replaces the regular inset. The anchor
  * element's box must already have been laid out (this runs after layout
@@ -703,7 +696,7 @@ static void resolve_anchor_insets(Node* node) {
       case 1: resolved = a_right; break;
       case 2: resolved = a_bottom; break;
       case 3: resolved = a_left; break;
-      case 4: /* center — pick axis by side */
+      case 4: /* center, pick axis by side */
         resolved = (i == 0 || i == 2) ? a_cy : a_cx;
         break;
       case 6: /* start = same as left/top by axis */
@@ -723,12 +716,11 @@ static void resolve_anchor_insets(Node* node) {
   }
 }
 
-/* ============================ out of flow (absolute/fixed) ============================ */
 static void layout_out_of_flow_one(Box* b, Node* node, ComputedStyle* ccs, LayoutCtx& lc,
                                    float cb_x, float cb_y, float cb_w, float cb_h) {
   {
     float em = ccs->font_size;
-    /* anchor positioning: resolve anchor() insets now — the containing block
+    /* anchor positioning: resolve anchor() insets now, the containing block
      * (and thus the anchor, if it's an in-flow sibling or ancestor) has been
      * laid out by the time we get here (abs children are positioned last). */
     resolve_anchor_insets(node);
@@ -753,7 +745,7 @@ static void layout_out_of_flow_one(Box* b, Node* node, ComputedStyle* ccs, Layou
       w = res_l(ccs->width, cb_w, em, lc);
     } else if (has_left && has_right) {
       /* both insets: derive width from them. anchor insets are in absolute
-       * page coords, so the span is (right - left) — margins handled later. */
+       * page coords, so the span is (right - left), margins handled later. */
       if (ccs->anchor_resolved_ok[3] || ccs->anchor_resolved_ok[1]) {
         float lv = side_val(3, cb_w);
         float rv = side_val(1, cb_w);
@@ -803,7 +795,7 @@ static void layout_out_of_flow_one(Box* b, Node* node, ComputedStyle* ccs, Layou
     }
     if (predef_h > 0) {
       /* top+bottom both specified: the box stretches to the resolved height
-       * (CSS: over-constrained abs positioning → height comes from offsets) */
+       * (CSS: over-constrained abs positioning to height comes from offsets) */
       cb->h = predef_h;
       cb->ch = std::max(0.f, predef_h - cb->pad_t - cb->pad_b - cb->bor_t - cb->bor_b);
     }
@@ -876,7 +868,6 @@ static void layout_out_of_flow_children(Box* b, Node* el, LayoutCtx& lc) {
   }
 }
 
-/* ============================ document entry ============================ */
 Box* layout_document(Document* doc, int vw, int vh, ImageCacheView* images) {
   LayoutCtx lc;
   lc.doc = doc;

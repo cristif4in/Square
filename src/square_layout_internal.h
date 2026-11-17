@@ -1,18 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_layout_internal.h
- *  Shared declarations between the layout modules:
- *    square_layout_common.cpp  shared helpers, measurement, box tree utils
- *    square_layout_inline.cpp  inline items + inline layout core
- *    square_layout_block.cpp   block layout, element dispatch, entry point
- *    square_layout_flex.cpp    flexbox layout
- *    square_layout_grid.cpp    grid layout
- *    square_layout_paint.cpp   paint traversal, scrollbar, document paint
- *
- *  Layout contract between parent and child:
- *    caller sets  b->x, b->y (border-box origin, page coords)
- *                 b->w (border-box width), b->cw (content width)
- *    layout_element() sets b->h (border-box height) and returns it.
- * ===================================================================== */
+/* Shared declarations between the layout modules:, square_layout_common.cpp shared helpers, measurement, box tree utils, square_layout_inline.cpp inline items + inline layout core, square_layout_block.cpp block layout, element dispatch, entry point, square_layout_flex.cpp flexbox layout, square_layout_grid.cpp grid layout, square_layout_paint.cpp paint traversal, scrollbar, document paint, Layout contract between parent and child:, caller sets b->x, b->y (border-box origin, page coords), b->w (border-box width), b->cw (content width), layout_element() sets b->h (border-box height) and returns it */
 #pragma once
 
 #include "square_internal.h"
@@ -22,7 +8,6 @@
 
 namespace sqrl {
 
-/* ============================ inline items ============================ */
 struct InlineItem {
   enum Kind : uint8_t { I_TEXT, I_EL_START, I_EL_END, I_REPLACED, I_BR, I_SOFTBREAK } kind = I_TEXT;
   Node* node = nullptr;
@@ -38,7 +23,6 @@ struct InlineItem {
   float va_len = 0;
 };
 
-/* ============================ shared helpers (square_layout_common.cpp) ============================ */
 float res_l(const Length& L, float pct_basis, float em, LayoutCtx& lc);
 inline float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 /* vertical lengths resolve percentages against the parent's definite content
@@ -61,13 +45,11 @@ void resolve_box_edges(Box* b, const ComputedStyle* cs, float cw_basis, LayoutCt
 float measure_max_content_width(Node* el, LayoutCtx& lc);
 float measure_min_content_width(Node* el, LayoutCtx& lc);
 
-/* ============================ inline layout (square_layout_inline.cpp) ============================ */
 void flatten_nodes(const std::vector<Node*>& nodes, const ComputedStyle* cs,
                    std::vector<InlineItem>* items, LayoutCtx& lc, bool pre);
 float layout_inline_seq(Box* container, std::vector<InlineItem>& seq, LayoutCtx& lc,
                         float x_origin, float y_origin);
 
-/* ============================ layout dispatch (per-module) ============================ */
 float layout_element(Box* b, Node* el, LayoutCtx& lc);
 float layout_block_content(Box* b, Node* el, LayoutCtx& lc);
 float layout_flex_content(Box* b, Node* el, LayoutCtx& lc);

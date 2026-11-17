@@ -1,8 +1,4 @@
-/* =====================================================================
- *  Square Browser Engine — square_css.cpp
- *  CSS tokenizer (cursor in square_content_internal.h), selector parsing,
- *  media queries, stylesheet parsing, scrollbar styling.
- * ===================================================================== */
+/* CSS tokenizer (cursor in square_content_internal.h), selector parsing, media queries, stylesheet parsing, scrollbar styling */
 #include "square_css_internal.h"
 
 #include <algorithm>
@@ -182,7 +178,7 @@ bool parse_selector(const std::string& in, Selector* out) {
       continue;
     }
     /* pseudo-class arguments like :nth-child(2n+1) / :not(.a, .b) /
-     * :is(div > a) are verbatim — no combinators or commas inside parens */
+     * :is(div > a) are verbatim, no combinators or commas inside parens */
     if (c == '(') { paren++; cur += c; i++; continue; }
     if (c == ')') { if (paren > 0) paren--; cur += c; i++; continue; }
     if (paren > 0) { cur += c; i++; continue; }
@@ -386,7 +382,7 @@ void css_parse_stylesheet(const std::string& css, StyleSheet* out, int vw, int v
         if (pp != std::string::npos) {
           std::string before = trim(prelude.substr(0, pp));
           if (!before.empty()) {
-            /* a bare name token (no spaces — multi-token names are invalid) */
+            /* a bare name token (no spaces, multi-token names are invalid) */
             if (before.find(' ') == std::string::npos) {
               cname = before;
               if (cname.size() >= 2 && (cname.front() == '"' || cname.front() == '\'') &&
@@ -410,7 +406,7 @@ void css_parse_stylesheet(const std::string& css, StyleSheet* out, int vw, int v
           }
           out->rules.push_back(std::move(r));
         }
-        /* keyframes / font-faces inside @container — copy through */
+        /* keyframes / font-faces inside @container, copy through */
         for (auto& ff : tmp.fontfaces) out->fontfaces.push_back(ff);
         for (auto& kf : tmp.keyframes) out->keyframes.push_back(kf);
         for (auto& imp : tmp.imports) out->imports.push_back(imp);
@@ -679,7 +675,6 @@ void css_parse_stylesheet(const std::string& css, StyleSheet* out, int vw, int v
   }
 }
 
-/* ============================ scrollbar styling ============================ */
 /* apply one ::-webkit-scrollbar* rule to the document's scrollbar style */
 static void apply_scrollbar_rule(const std::string& pe, const std::vector<Declaration>& decls,
                                  const std::vector<std::string>& pseudo_classes,
