@@ -104,28 +104,56 @@ static void ui_draw_toolbar(BrowserUI& ui) {
   /* reload button */
   XSetForeground(dpy, ui.gc, 0xe6edf3);
   XDrawString(dpy, w, ui.gc, 38, 26, "r", 1);
-  /* address field */
-  int addr_x = 58;
-  XSetForeground(dpy, ui.gc, 0x1a2430);
-  XFillRectangle(dpy, w, ui.gc, addr_x, 8, ui.win_w - addr_x - 12, TOOLBAR_H - 16);
-  XSetForeground(dpy, ui.gc, 0x31414f);
-  XDrawRectangle(dpy, w, ui.gc, addr_x, 8, ui.win_w - addr_x - 12, TOOLBAR_H - 16);
+  /* address field: pill-shaped, magnifier glyph, placeholder, blinking caret */
+  int ax = 58, ay = 6, aw = ui.win_w - ax - 12, ah = TOOLBAR_H - 12;
+  unsigned long fill = ui.focused ? 0x0c141e : 0x1e2a38;
+  XSetForeground(dpy, ui.gc, fill);
+  XFillRectangle(dpy, w, ui.gc, ax + 4, ay, aw - 8, ah);
+  XFillArc(dpy, w, ui.gc, ax, ay, ah, ah, 0, 360 * 64);
+  XFillArc(dpy, w, ui.gc, ax + aw - ah, ay, ah, ah, 0, 360 * 64);
   if (ui.focused) {
-    XSetForeground(dpy, ui.gc, 0x5282ff);
-    XDrawRectangle(dpy, w, ui.gc, addr_x - 1, 7, ui.win_w - addr_x - 10, TOOLBAR_H - 14);
+    XSetForeground(dpy, ui.gc, 0x3a4a5c);
+    XDrawArc(dpy, w, ui.gc, ax, ay, ah, ah, 0, 360 * 64);
+    XDrawArc(dpy, w, ui.gc, ax + aw - ah, ay, ah, ah, 0, 360 * 64);
+    XDrawLine(dpy, w, ui.gc, ax + ah / 2, ay, ax + aw - ah / 2, ay);
+    XDrawLine(dpy, w, ui.gc, ax + ah / 2, ay + ah - 1, ax + aw - ah / 2, ay + ah - 1);
   }
-  XSetForeground(dpy, ui.gc, 0xe6edf3);
+  /* magnifier glyph */
+  int icx = ax + 20, icy = ay + ah / 2;
+  XSetForeground(dpy, ui.gc, 0x8a96a2);
+  XDrawArc(dpy, w, ui.gc, icx - 6, icy - 6, 9, 9, 0, 360 * 64);
+  XDrawLine(dpy, w, ui.gc, icx + 4, icy + 4, icx + 8, icy + 8);
+
+  int tx = ax + 34;
+  int tclip_x = tx, tclip_w = ax + aw - tx - 8;
   if (!ui.address.empty()) {
-    XDrawString(dpy, w, ui.gc, addr_x + 8, 26, ui.address.c_str(), (int)ui.address.size());
+    XSetForeground(dpy, ui.gc, 0xe6edf3);
+    int tw = ui.font_struct
+                 ? XTextWidth(ui.font_struct, ui.address.c_str(), (int)ui.address.size())
+                 : (int)ui.address.size() * 6;
+    int avail = tclip_w - tx;
+    int x = tx;
+    if (tw > avail) x = tclip_x + avail - tw; /* keep the tail (caret end) visible */
+    XRectangle clip = {(short)tclip_x, (short)ay, (unsigned short)tclip_w, (unsigned short)ah};
+    XSetClipRectangles(dpy, ui.gc, 0, 0, &clip, 1, Unsorted);
+    XDrawString(dpy, w, ui.gc, x, ay + ah / 2 + 5, ui.address.c_str(), (int)ui.address.size());
     if (ui.focused) {
-      int tw = ui.font_struct
-                   ? XTextWidth(ui.font_struct, ui.address.c_str(), (int)ui.address.size())
-                   : (int)ui.address.size() * 6;
-      XFillRectangle(dpy, w, ui.gc, addr_x + 8 + tw + 1, 12, 7, TOOLBAR_H - 24);
+      long nowl = (long)clock();
+      if ((nowl / (CLOCKS_PER_SEC / 2)) % 2 == 0) {
+        int cx = x + tw + 1;
+        if (cx > tclip_x + avail) cx = tclip_x + avail;
+        XSetForeground(dpy, ui.gc, 0xe6edf3);
+        XFillRectangle(dpy, w, ui.gc, cx, ay + 7, 2, ah - 14);
+      }
     }
+    XSetClipMask(dpy, ui.gc, None);
   } else {
-    XSetForeground(dpy, ui.gc, 0x6a7a88);
-    XDrawString(dpy, w, ui.gc, addr_x + 8, 26, "Enter URL and press Enter", 25);
+    XSetForeground(dpy, ui.gc, 0x8a96a2);
+    const char* ph = "Search or type a URL";
+    XRectangle clip = {(short)tclip_x, (short)ay, (unsigned short)tclip_w, (unsigned short)ah};
+    XSetClipRectangles(dpy, ui.gc, 0, 0, &clip, 1, Unsorted);
+    XDrawString(dpy, w, ui.gc, tx, ay + ah / 2 + 5, ph, (int)strlen(ph));
+    XSetClipMask(dpy, ui.gc, None);
   }
 }
 
@@ -228,7 +256,9 @@ int run_x11(square_instance* inst, const std::string& url, int vw, int vh) {
         }
       } else if (ev.type == ButtonPress) {
         if (ev.xbutton.y < TOOLBAR_H) {
-          ui.focused = true;
+          int mx = ev.xbutton.x;
+          bool in_field = mx >= 58 && mx < ui.win_w - 12;
+          ui.focused = in_field; /* clicks on the page or buttons blur the field */
         } else if (ev.xbutton.button == Button1 &&
                    square_scrollbar_hit(ui.inst, ev.xbutton.x)) {
           ui.drag_sb = true;
@@ -262,9 +292,9 @@ int run_x11(square_instance* inst, const std::string& url, int vw, int vh) {
           const char* title = square_get_title(inst);
           std::string t = (title && *title ? title : "Square") + std::string(" — Square");
           XStoreName(dpy, win, t.c_str());
-          /* keep the address bar in sync with in-page link navigation */
+          /* keep the address field in sync with in-page link navigation */
           const char* cur = square_get_url(inst);
-          if (cur && *cur) ui.address = cur;
+          if (cur && *cur && !ui.focused) ui.address = cur;
         }
       }
       ui_render_frame(ui);
