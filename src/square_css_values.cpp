@@ -1152,7 +1152,7 @@ void parse_transform(const std::string& v, ComputedStyle* cs) {
       compose_both(m);
     } else if (fn == "translatey") {
       float m[6] = {1, 0, 0, 1, 0, arg(0, 0)};
-      compose(m);
+      compose2(m);
     } else if (fn == "scale") {
       float sx = arg(0, 1);
       float m[6] = {sx, 0, 0, arg(1, sx), 0, 0};
@@ -1162,7 +1162,7 @@ void parse_transform(const std::string& v, ComputedStyle* cs) {
       compose_both(m);
     } else if (fn == "scaley") {
       float m[6] = {1, 0, 0, arg(0, 1), 0, 0};
-      compose(m);
+      compose2(m);
     } else if (fn == "rotate") {
       float a = arg(0, 0) * 3.14159265f / 180.f;
       float m[6] = {cosf(a), sinf(a), -sinf(a), cosf(a), 0, 0};

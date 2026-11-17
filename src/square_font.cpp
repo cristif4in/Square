@@ -755,6 +755,9 @@ static std::mutex g_shape_mtx;
 static std::unordered_map<ShapeCacheKey, std::pair<float, std::vector<GlyphPos>>, ShapeCacheKeyHash>
     g_shape_cache;
 
+static float font_shape_uncached(void* font, const char* utf8, float letter_spacing,
+                                 std::vector<GlyphPos>* out, float word_spacing);
+
 float font_shape(void* font, const char* utf8, float letter_spacing, std::vector<GlyphPos>* out,
                  float word_spacing) {
   if (!font) return 0;

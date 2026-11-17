@@ -622,7 +622,7 @@ IframeData* iframe_cache_get(const std::string& url) {
 }
 
 /* ensure the nested document is laid out and rasterized at the box size */
-static Surface* iframe_render(const std::string& url, int w, int h) {
+Surface* iframe_render(const std::string& url, int w, int h) {
   IframeData* d = iframe_cache_get(url);
   if (!d || d->html.empty() || w < 4 || h < 4) return nullptr;
   if (!d->doc) d->doc = html_parse_document(d->html);

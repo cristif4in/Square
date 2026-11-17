@@ -4,6 +4,7 @@
  *  input & hit testing) and the page thread. Split from square_platform.cpp.
  * ===================================================================== */
 #include "square_platform_internal.h"
+#include "square_content_internal.h" /* lc/trim */
 
 #include <algorithm>
 #include <chrono>

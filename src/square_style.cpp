@@ -15,6 +15,8 @@
 
 namespace sqrl {
 
+static float anim_time_s(); /* defined below; used by css_starting_active */
+
 static std::atomic<bool> g_any_transitions{false};
 static double g_starting_until = -1;
 bool css_starting_active() { return g_any_transitions && anim_time_s() < g_starting_until; }

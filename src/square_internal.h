@@ -330,6 +330,17 @@ struct BgLayer {
   bool repeat_y = true;                  /* repeat-y: tile vertically only */
 };
 
+/* CSS filter() chain (filter / backdrop-filter) */
+struct FilterSpec {
+  float brightness = 1, contrast = 1, saturate = 1;
+  float grayscale = 0, sepia = 0, invert = 0;
+  float opacity = 1, hue_rotate = 0;
+  bool active() const {
+    return brightness != 1 || contrast != 1 || saturate != 1 || grayscale > 0 ||
+           sepia > 0 || invert > 0 || opacity < 1 || hue_rotate != 0;
+  }
+};
+
 struct ComputedStyle {
   /* boxes */
   Display display = D_INLINE;
@@ -395,6 +406,7 @@ struct ComputedStyle {
   float aspect_ratio = 0;                /* width/height, 0 = none */
   float blur_px = 0;
   float backdrop_blur_px = 0;
+  FilterSpec filter, backdrop_filter;
   std::string content;                   /* pseudo-elements */
   bool content_set = false;
   /* content(): 0 string, 1 attr(name), 2 counter(name[, style]), 3 counters(name, sep) */
@@ -706,6 +718,8 @@ struct IframeData {
 };
 void iframe_cache_put(const std::string& url, std::string html);
 IframeData* iframe_cache_get(const std::string& url);
+/* lay out + rasterize a cached iframe's nested document at the given box size */
+Surface* iframe_render(const std::string& url, int w, int h);
 
 /* apply a filter() chain (brightness/contrast/...) to a region in place */
 void gfx_apply_filter(Surface& s, const Rect& r, const FilterSpec& fx);
