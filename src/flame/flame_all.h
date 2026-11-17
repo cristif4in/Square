@@ -14,9 +14,9 @@
 #if CONFIG_FLAME
 
 #include "flame_debug.c"
+#include "flame_profiler.c"
 
 /* flame_rt.c — runtime state, tiering policy, executable memory  (phase 4) */
-/* flame_profiler.c — type feedback tables                        (phase 2) */
 /* flame_ic.c — inline cache side-tables                          (phase 3) */
 /* emitter_x64.c / emitter_arm64.c — machine emitters             (phase 5/6) */
 /* flame_baseline.c — baseline tier                               (phase 5) */

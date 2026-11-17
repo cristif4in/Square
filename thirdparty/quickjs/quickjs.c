@@ -642,6 +642,13 @@ typedef struct JSFunctionBytecode {
         uint8_t *pc2line_buf;
         char *source;
     } debug;
+#if CONFIG_FLAME
+    /* Flame JIT: tiering counter + lazily-allocated profiling side table
+     * (FlameProfile, owned by src/flame/flame_profiler.c). NULL until the
+     * function goes hot; freed in free_function_bytecode(). */
+    uint32_t flame_exec_count;
+    void *flame_prof;
+#endif
 } JSFunctionBytecode;
 
 typedef struct JSBoundFunction {
@@ -16272,6 +16279,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     rt->current_stack_frame = sf;
     ctx = b->realm; /* set the current realm */
 
+#if CONFIG_FLAME
+    /* Flame: tiering driver — counts entries, enables profiling, and may
+     * eventually transfer execution to JIT code (never changes semantics). */
+    flame_hook_function_entry(ctx, p, b);
+#endif
+
  restart:
     for(;;) {
         int call_argc;
@@ -16600,6 +16613,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 goto has_call_argc;
             has_call_argc:
                 call_argv = sp - call_argc;
+#if CONFIG_FLAME
+                /* site id = bytecode offset of the call opcode (short callN
+                 * has no immediate operand; call/tail_call carry a u16 argc) */
+                flame_hook_call_site(b,
+                    (uint32_t)(pc - ((opcode >= OP_call0 && opcode <= OP_call3) ? 1 : 3) - b->byte_code_buf),
+                    call_argc, call_argv);
+#endif
                 sf->cur_pc = pc;
                 ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                           JS_UNDEFINED, call_argc, call_argv, 0);
@@ -17268,18 +17288,39 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             BREAK;
 
         CASE(OP_goto):
-            pc += (int32_t)get_u32(pc);
+            {
+                int32_t diff = (int32_t)get_u32(pc);
+#if CONFIG_FLAME
+                if (diff < 0) /* backward jump: loop backedge */
+                    flame_hook_loop_backedge(b, (uint32_t)(pc + diff - b->byte_code_buf));
+#endif
+                pc += diff;
+            }
             if (unlikely(js_poll_interrupts(ctx)))
                 goto exception;
             BREAK;
 #if SHORT_OPCODES
         CASE(OP_goto16):
-            pc += (int16_t)get_u16(pc);
+            {
+                int32_t diff = (int16_t)get_u16(pc);
+#if CONFIG_FLAME
+                if (diff < 0)
+                    flame_hook_loop_backedge(b, (uint32_t)(pc + diff - b->byte_code_buf));
+#endif
+                pc += diff;
+            }
             if (unlikely(js_poll_interrupts(ctx)))
                 goto exception;
             BREAK;
         CASE(OP_goto8):
-            pc += (int8_t)pc[0];
+            {
+                int32_t diff = (int8_t)pc[0];
+#if CONFIG_FLAME
+                if (diff < 0)
+                    flame_hook_loop_backedge(b, (uint32_t)(pc + diff - b->byte_code_buf));
+#endif
+                pc += diff;
+            }
             if (unlikely(js_poll_interrupts(ctx)))
                 goto exception;
             BREAK;
@@ -17298,6 +17339,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 sp--;
                 if (res) {
+#if CONFIG_FLAME
+                    if ((int32_t)get_u32(pc - 4) < 0)
+                        flame_hook_loop_backedge(b, (uint32_t)(pc + (int32_t)get_u32(pc - 4) - 4 - b->byte_code_buf));
+#endif
                     pc += (int32_t)get_u32(pc - 4) - 4;
                 }
                 if (unlikely(js_poll_interrupts(ctx)))
@@ -17319,6 +17364,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 sp--;
                 if (!res) {
+#if CONFIG_FLAME
+                    if ((int32_t)get_u32(pc - 4) < 0)
+                        flame_hook_loop_backedge(b, (uint32_t)(pc + (int32_t)get_u32(pc - 4) - 4 - b->byte_code_buf));
+#endif
                     pc += (int32_t)get_u32(pc - 4) - 4;
                 }
                 if (unlikely(js_poll_interrupts(ctx)))
@@ -17340,6 +17389,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 sp--;
                 if (res) {
+#if CONFIG_FLAME
+                    if ((int8_t)pc[-1] < 0)
+                        flame_hook_loop_backedge(b, (uint32_t)(pc + (int8_t)pc[-1] - 1 - b->byte_code_buf));
+#endif
                     pc += (int8_t)pc[-1] - 1;
                 }
                 if (unlikely(js_poll_interrupts(ctx)))
@@ -17360,6 +17413,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 sp--;
                 if (!res) {
+#if CONFIG_FLAME
+                    if ((int8_t)pc[-1] < 0)
+                        flame_hook_loop_backedge(b, (uint32_t)(pc + (int8_t)pc[-1] - 1 - b->byte_code_buf));
+#endif
                     pc += (int8_t)pc[-1] - 1;
                 }
                 if (unlikely(js_poll_interrupts(ctx)))
@@ -17559,6 +17616,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 atom = get_u32(pc);
                 pc += 4;
 
+#if CONFIG_FLAME
+                flame_hook_get_field(b, (uint32_t)(pc - 5 - b->byte_code_buf), sp[-1], atom);
+#endif
                 sf->cur_pc = pc;
                 val = JS_GetProperty(ctx, sp[-1], atom);
                 if (unlikely(JS_IsException(val)))
@@ -17782,6 +17842,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             {
                 JSValue val;
 
+#if CONFIG_FLAME
+                flame_hook_get_array_el(b, (uint32_t)(pc - 1 - b->byte_code_buf), sp[-2], sp[-1]);
+#endif
                 sf->cur_pc = pc;
                 val = JS_GetPropertyValue(ctx, sp[-2], sp[-1]);
                 JS_FreeValue(ctx, sp[-2]);
@@ -17980,6 +18043,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JSValue op1, op2;
                 op1 = sp[-2];
                 op2 = sp[-1];
+#if CONFIG_FLAME
+                flame_hook_binop(b, (uint32_t)(pc - 1 - b->byte_code_buf), OP_add, op1, op2);
+#endif
                 if (likely(JS_VALUE_IS_BOTH_INT(op1, op2))) {
                     int64_t r;
                     r = (int64_t)JS_VALUE_GET_INT(op1) + JS_VALUE_GET_INT(op2);
@@ -18060,6 +18126,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JSValue op1, op2;
                 op1 = sp[-2];
                 op2 = sp[-1];
+#if CONFIG_FLAME
+                flame_hook_binop(b, (uint32_t)(pc - 1 - b->byte_code_buf), OP_sub, op1, op2);
+#endif
                 if (likely(JS_VALUE_IS_BOTH_INT(op1, op2))) {
                     int64_t r;
                     r = (int64_t)JS_VALUE_GET_INT(op1) - JS_VALUE_GET_INT(op2);
@@ -18082,6 +18151,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 double d;
                 op1 = sp[-2];
                 op2 = sp[-1];
+#if CONFIG_FLAME
+                flame_hook_binop(b, (uint32_t)(pc - 1 - b->byte_code_buf), OP_mul, op1, op2);
+#endif
                 if (likely(JS_VALUE_IS_BOTH_INT(op1, op2))) {
                     int32_t v1, v2;
                     int64_t r;
@@ -18114,6 +18186,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JSValue op1, op2;
                 op1 = sp[-2];
                 op2 = sp[-1];
+#if CONFIG_FLAME
+                flame_hook_binop(b, (uint32_t)(pc - 1 - b->byte_code_buf), OP_div, op1, op2);
+#endif
                 if (likely(JS_VALUE_IS_BOTH_INT(op1, op2))) {
                     int v1, v2;
                     v1 = JS_VALUE_GET_INT(op1);
@@ -18130,6 +18205,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JSValue op1, op2;
                 op1 = sp[-2];
                 op2 = sp[-1];
+#if CONFIG_FLAME
+                flame_hook_binop(b, (uint32_t)(pc - 1 - b->byte_code_buf), OP_mod, op1, op2);
+#endif
                 if (likely(JS_VALUE_IS_BOTH_INT(op1, op2))) {
                     int v1, v2, r;
                     v1 = JS_VALUE_GET_INT(op1);
@@ -33828,6 +33906,10 @@ static void free_function_bytecode(JSRuntime *rt, JSFunctionBytecode *b)
         js_free_rt(rt, b->debug.pc2line_buf);
         js_free_rt(rt, b->debug.source);
     }
+
+#if CONFIG_FLAME
+    flame_free_profile(rt, b->flame_prof);
+#endif
 
     remove_gc_object(&b->header);
     if (rt->gc_phase == JS_GC_PHASE_REMOVE_CYCLES && b->header.ref_count != 0) {

@@ -48,6 +48,58 @@ void flame_log(int level, const char *fmt, ...) __attribute__((format(printf,2,3
 #define FLAME_HOT_FUNC_THRESHOLD  2000
 
 /* ------------------------------------------------------------------ */
+/* Value-kind feedback encoding                                        */
+/* ------------------------------------------------------------------ */
+
+typedef enum FlameKind {
+    FLAME_KIND_NONE    = 0,
+    FLAME_KIND_INT     = 1,
+    FLAME_KIND_FLOAT   = 2,
+    FLAME_KIND_STRING  = 3,
+    FLAME_KIND_OBJECT  = 4,
+    FLAME_KIND_BOOL    = 5,
+    FLAME_KIND_NULLISH = 6,  /* null or undefined */
+    FLAME_KIND_BIGINT  = 7,
+    FLAME_KIND_SYMBOL  = 8,
+    FLAME_KIND_MIXED   = 9,  /* more than one kind observed */
+} FlameKind;
+
+/* Per-bytecode profiling side table, lazily allocated when the function
+ * reaches FLAME_HOT_ENTRY_THRESHOLD interpreter entries. Referenced from
+ * JSFunctionBytecode.flame_prof. */
+typedef struct FlameCallSite {
+    uint32_t pc_off;   /* bytecode offset of the call opcode */
+    uint32_t count;    /* call frequency */
+    uint8_t  arg_kind; /* FLAME_KIND of the callee (argv[-1]) so far */
+} FlameCallSite;
+
+typedef struct FlameLoop {
+    uint32_t pc_off;   /* bytecode offset of the loop header (jump target) */
+    uint32_t count;    /* backedge count */
+} FlameLoop;
+
+typedef struct FlameProfile {
+    uint32_t magic;       /* FLAME_PROFILE_MAGIC */
+    uint8_t *binop_fb;    /* byte per bytecode offset: (lhs<<4)|rhs FlameKind,
+                             0xFF byte offset = no arith op there */
+    int binop_fb_len;     /* == byte_code_len */
+    FlameCallSite *calls; int call_count, call_cap;
+    FlameLoop *loops;     int loop_count, loop_cap;
+    uint32_t entries;     /* interpreter entries since profiling started */
+} FlameProfile;
+
+#define FLAME_PROFILE_MAGIC 0x464C414D  /* 'FLAM' */
+
+/* Kind of a JSValue for feedback purposes. */
+FlameKind flame_kind_of(JSValueConst v);
+/* Classify a FlameKind observation into a feedback byte slot (monotonic
+ * widening: distinct kinds collapse to FLAME_KIND_MIXED). */
+void flame_fb_record(uint8_t *slot, FlameKind k);
+
+/* Profile lifecycle (defined in flame_profiler.c). */
+void flame_free_profile(struct JSRuntime *rt, void *prof);
+
+/* ------------------------------------------------------------------ */
 /* Hook entry points (called from quickjs.c, defined in Flame sources) */
 /* ------------------------------------------------------------------ */
 
