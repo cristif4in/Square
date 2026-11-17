@@ -48,7 +48,6 @@
 
 namespace sqrl {
 
-/* ============================ ThreadPool ============================ */
 struct ThreadPool::Impl {
   std::vector<std::thread> workers;
   std::queue<std::function<void()>> jobs;

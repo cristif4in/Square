@@ -958,8 +958,21 @@ static Track parse_track(const std::string& t) {
 void parse_grid_tracks(const std::string& v, std::vector<Track>* out,
                               std::vector<Track>* auto_out,
                               uint8_t* auto_mode) {
-  /* handle repeat(N, ...) */
+  /* handle repeat(N, ...) and the 'subgrid' keyword.
+   * 'subgrid' on its own (optionally followed by repeat(N, ...) line-name
+   * inheritance which we don't yet model) means: this axis inherits the
+   * parent grid's track list. We mark it with a single TR_SUBGRID sentinel;
+   * the grid layout resolves the actual track sizes against the parent. */
   std::string s = trim(v);
+  /* leading "subgrid" (with optional "subgrid" + later tokens for line names) */
+  if (lc(s).rfind("subgrid", 0) == 0) {
+    Track sg;
+    sg.type = TR_SUBGRID;
+    out->clear();
+    out->push_back(sg);
+    if (auto_mode) *auto_mode = 0;
+    return;
+  }
   size_t i = 0;
   while (i < s.size()) {
     while (i < s.size() && isspace((unsigned char)s[i])) i++;

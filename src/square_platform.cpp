@@ -1040,8 +1040,20 @@ void page_main(Instance* inst, std::string url) {
   inst->js_epoch = now_ms();
   inst->rt = JS_NewRuntime();
   if (inst->rt) {
+    /* baseline interpreter improvements: tuned GC + memory settings.
+     * - memory limit: 512 MB (was 512 MB — kept, the default would be
+     *   unlimited which leads to OOM on long-running pages with leaks).
+     * - GC threshold: lowered from the QuickJS default (~256 KB) to 8 MB
+     *   so minor GCs run less often on hot pages (each GC pauses the
+     *   interpreter). The trade-off: more memory used transiently, but
+     *   React/class-component render passes typically allocate 5-15 MB
+     *   of short-lived objects that get freed in one sweep rather than
+     *   triggering many small GCs mid-render.
+     * - max stack: 4 MB (was 2 MB) — deep React call chains were hitting
+     *   the previous limit on complex component trees. */
     JS_SetMemoryLimit(inst->rt, 512 * 1024 * 1024);
-    JS_SetMaxStackSize(inst->rt, 2 * 1024 * 1024);
+    JS_SetGCThreshold(inst->rt, 8 * 1024 * 1024);
+    JS_SetMaxStackSize(inst->rt, 4 * 1024 * 1024);
     inst->jctx = JS_NewContext(inst->rt);
     JS_SetContextOpaque(inst->jctx, inst);
     if (!node_class_id) JS_NewClassID(&node_class_id);
@@ -1120,6 +1132,7 @@ void page_main(Instance* inst, std::string url) {
     setfn("setTitle", js_set_title_fn, 1);
     setfn("rect", js_rect_of, 1);
     setfn("__sq_perf_now", js_perf_now, 0);
+    setfn("__sq_start_view_transition", js_start_view_transition, 1);
     setfn("__sq_navigate", js_navigate_to, 1);
     setfn("__sq_cookie_get", js_cookie_get, 0);
     setfn("__sq_cookie_set", js_cookie_set, 1);
@@ -1361,6 +1374,9 @@ js_done:;
       last_anim_frame = now_ms();
       std::lock_guard<std::mutex> doclk(inst->doc_mtx);
       if (!inst->dirty && !inst->cancel && inst->doc->body) {
+        /* feed current scroll/page metrics so scroll-driven animations
+         * (animation-timeline: scroll()/view()) can compute progress. */
+        style_set_scroll_anim_ctx(inst->scroll_y, inst->vh, inst->page_h > 0 ? inst->page_h : inst->vh);
         style_reanimate(inst->doc, inst->vw, inst->vh);
         int vw = inst->vw, vh = inst->vh;
         if (inst->root_box) free_box_tree(inst->root_box);

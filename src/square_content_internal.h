@@ -18,6 +18,7 @@ namespace sqrl {
 std::string lc(std::string s);
 std::string trim(const std::string& s);
 bool starts_with(const std::string& s, const char* p);
+std::string strip_quotes(const std::string& s);
 
 /* ---- character references (defined in square_content.cpp) ---- */
 void decode_entities_into(const std::string& in, std::string* out);

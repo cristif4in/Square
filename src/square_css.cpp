@@ -118,9 +118,18 @@ static void parse_compound(const std::string& comp, SelPart* part) {
       }
       if (name == "before" || name == "after" || name == "first-line" || name == "first-letter" ||
           name == "placeholder" || name == "marker" || name == "selection" ||
-          starts_with(name, "webkit-scrollbar")) {
-        if (name == "before" || name == "after" || starts_with(name, "webkit-scrollbar"))
+          starts_with(name, "webkit-scrollbar") ||
+          starts_with(name, "view-transition")) {
+        if (name == "before" || name == "after" || starts_with(name, "webkit-scrollbar") ||
+            starts_with(name, "view-transition")) {
+          /* preserve the full pseudo-element token (with its optional name arg)
+           * so the cascade can later dispatch by name. For view-transition-*,
+           * the arg form is e.g. ::view-transition-group(card) where 'card'
+           * is the view-transition-name of the element being transitioned. */
           part->pseudo_element = name;
+          if (!arg.empty() && starts_with(name, "view-transition-"))
+            part->pseudo_element += "(" + arg + ")";
+        }
       } else {
         if (!arg.empty()) name += "(" + arg + ")";
         part->pseudo_classes.push_back(name);
@@ -333,7 +342,7 @@ void css_parse_stylesheet(const std::string& css, StyleSheet* out, int vw, int v
             /* stamp media on new rules? they matched; nothing needed */
           }
         }
-      } else if (name == "supports" || name == "layer" || name == "container") {
+      } else if (name == "supports" || name == "layer") {
         c.ws();
         std::string prelude = c.read_until_chars("{");
         if (c.peek() == '{') {
@@ -349,6 +358,62 @@ void css_parse_stylesheet(const std::string& css, StyleSheet* out, int vw, int v
           if (c.i < css.size()) c.i++;
           css_parse_stylesheet(inner, out, vw, vh); /* treat @supports as matching */
         }
+      } else if (name == "container") {
+        /* @container [<name>]? (<features>) { ...rules... }
+         * Parse the optional leading name token (an identifier, possibly
+         * quoted) and the rest as a media-query-style condition. The inner
+         * rules are parsed recursively and stamped with the condition so the
+         * cascade can evaluate them against the nearest container. */
+        c.ws();
+        std::string prelude = c.read_until_chars("{");
+        if (c.peek() != '{') { c.skip_until_char(';'); continue; }
+        c.i++;
+        size_t start = c.i;
+        int depth = 1;
+        while (c.i < css.size() && depth > 0) {
+          if (css[c.i] == '{') depth++;
+          else if (css[c.i] == '}') depth--;
+          if (depth > 0) c.i++;
+        }
+        std::string inner = css.substr(start, c.i - start);
+        if (c.i < css.size()) c.i++;
+        /* split prelude into name + condition: the condition is the first
+         * parenthesised group; anything before it (whitespace-separated) is
+         * the container name. */
+        std::string cname;
+        std::string cond;
+        size_t pp = prelude.find('(');
+        if (pp != std::string::npos) {
+          std::string before = trim(prelude.substr(0, pp));
+          if (!before.empty()) {
+            /* a bare name token (no spaces — multi-token names are invalid) */
+            if (before.find(' ') == std::string::npos) {
+              cname = before;
+              if (cname.size() >= 2 && (cname.front() == '"' || cname.front() == '\'') &&
+                  cname.back() == cname.front())
+                cname = cname.substr(1, cname.size() - 2);
+            }
+          }
+          cond = trim(prelude.substr(pp));
+        } else {
+          cond = trim(prelude);
+        }
+        auto mq = std::make_shared<MediaQuery>();
+        bool parsed_ok = cond.empty() ? true : parse_media_query(cond, mq.get());
+        /* parse inner into a temp stylesheet, then stamp+merge into out */
+        StyleSheet tmp;
+        css_parse_stylesheet(inner, &tmp, vw, vh);
+        for (auto& r : tmp.rules) {
+          if (parsed_ok) {
+            r.container_query = mq;
+            r.container_name_filter = cname;
+          }
+          out->rules.push_back(std::move(r));
+        }
+        /* keyframes / font-faces inside @container — copy through */
+        for (auto& ff : tmp.fontfaces) out->fontfaces.push_back(ff);
+        for (auto& kf : tmp.keyframes) out->keyframes.push_back(kf);
+        for (auto& imp : tmp.imports) out->imports.push_back(imp);
       } else if (name == "starting-style") {
         c.ws();
         if (c.peek() != '{') { c.skip_until_char(';'); continue; }
@@ -545,6 +610,36 @@ void css_parse_stylesheet(const std::string& css, StyleSheet* out, int vw, int v
     if (starts_with(pe, "webkit-scrollbar")) {
       apply_scrollbar_rule(pe, rule.decls,
                            rule.sels[0].parts.back().pseudo_classes, &out->sbstyle);
+      continue;
+    }
+    /* ::view-transition* rules configure the document's view-transition
+     * pseudo-elements (no real DOM target). Parse the kind and optional name
+     * arg from the pseudo_element string and stash in the stylesheet. */
+    if (starts_with(pe, "view-transition")) {
+      StyleSheet::VTRule vt;
+      /* pe forms:
+       *   "view-transition"                      -> kind=""  name=""
+       *   "view-transition-group(card)"          -> kind="group" name="card"
+       *   "view-transition-image-pair(card)"     -> kind="image-pair" name="card"
+       *   "view-transition-old(card)"            -> kind="old" name="card"
+       *   "view-transition-new(card)"            -> kind="new" name="card" */
+      std::string s = pe;
+      if (s == "view-transition") {
+        vt.kind = "";
+      } else {
+        /* strip "view-transition-" prefix */
+        std::string rest = s.substr(strlen("view-transition-"));
+        size_t lp = rest.find('(');
+        if (lp != std::string::npos) {
+          vt.kind = rest.substr(0, lp);
+          size_t rp = rest.find(')', lp);
+          vt.name = rest.substr(lp + 1, rp == std::string::npos ? std::string::npos : rp - lp - 1);
+        } else {
+          vt.kind = rest;
+        }
+      }
+      vt.decls = rule.decls;
+      out->view_transition_rules.push_back(std::move(vt));
       continue;
     }
     /* firefox-style scrollbar-width / scrollbar-color on any selector */

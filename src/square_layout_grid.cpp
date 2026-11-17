@@ -12,10 +12,51 @@
 namespace sqrl {
 
 /* ============================ grid layout ============================ */
+/* subgrid axis inheritance: when a grid item declares `grid-template-columns:
+ * subgrid` (or rows: subgrid), its track list is a single TR_SUBGRID sentinel.
+ * The actual track sizes are the parent grid's resolved track sizes for the
+ * columns (or rows) spanned by the subgrid item. LayoutCtx carries an optional
+ * pointer to that resolved parent track list plus the subgrid item's starting
+ * track index so the child grid can copy them in.
+ *
+ * Since LayoutCtx is shared across the whole layout pass, we stash the parent
+ * tracks on a small stack via a thread_local vector of "active subgrid
+ * context" records. Each grid_layout_content call pushes/pops as it descends.
+ */
+struct SubgridCtx {
+  const std::vector<float>* cols = nullptr;
+  const std::vector<float>* rows = nullptr;
+  int col_start = 0;
+  int row_start = 0;
+  float col_gap = 0;
+  float row_gap = 0;
+};
+static thread_local std::vector<SubgridCtx> g_subgrid_stack;
+
 float layout_grid_content(Box* b, Node* el, LayoutCtx& lc) {
   ComputedStyle* cs = b->cs;
   float avail_w = b->cw;
   std::vector<Track> cols = cs->grid_cols;
+  /* subgrid column-axis: if the first declared track is TR_SUBGRID and we
+   * have an active subgrid parent on the stack, replace `cols` with a flat
+   * list of TR_PX tracks whose sizes are the parent's resolved column sizes
+   * for the columns spanned by this box. We need the span count: read from
+   * the box's own grid_col_span (set on the parent's item-placement loop). */
+  bool col_subgrid = !cols.empty() && cols[0].type == TR_SUBGRID;
+  bool row_subgrid = !cs->grid_rows.empty() && cs->grid_rows[0].type == TR_SUBGRID;
+  if (col_subgrid && !g_subgrid_stack.empty()) {
+    const auto& parent = g_subgrid_stack.back();
+    if (parent.cols && parent.cols->size() > 0) {
+      int span = std::max(1, cs->grid_col_span);
+      int start = parent.col_start;
+      if (start < 0) start = 0;
+      cols.clear();
+      for (int k = 0; k < span && start + k < (int)parent.cols->size(); k++) {
+        Track t; t.type = TR_PX; t.v = (*parent.cols)[start + k];
+        cols.push_back(t);
+      }
+    }
+  }
   if (cs->grid_auto_mode && !cs->grid_auto_template.empty()) {
     /* repeat(auto-fit|auto-fill, T): repeat as many min-sized tracks as fit */
     float minw = 0;
@@ -148,7 +189,20 @@ float layout_grid_content(Box* b, Node* el, LayoutCtx& lc) {
       it.box->cw = std::max(0.f, span_w - it.box->pad_l - it.box->pad_r - it.box->bor_l - it.box->bor_r);
       it.box->x = 0;
       it.box->y = 0;
+      /* push subgrid context: a subgrid item will look at the top of the
+       * stack to copy this grid's resolved column sizes for its spanned
+       * columns. col_start is the item's starting column; the child's
+       * grid_col_span is its parent-declared span (already on its cs). */
+      SubgridCtx sg;
+      sg.cols = &colw;
+      sg.rows = &rowh;
+      sg.col_start = it.col;
+      sg.row_start = it.row;
+      sg.col_gap = col_gap;
+      sg.row_gap = row_gap;
+      g_subgrid_stack.push_back(sg);
       float ch = layout_element(it.box, it.node, lc);
+      g_subgrid_stack.pop_back();
       it.h = ch + it.box->pad_t + it.box->pad_b + it.box->bor_t + it.box->bor_b;
       if (ics->height.unit != L_AUTO && ics->height.unit != L_NORMAL)
         it.h = res_l(ics->height, span_w, ics->font_size, lc);

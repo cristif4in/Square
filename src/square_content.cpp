@@ -28,6 +28,14 @@ Document::~Document() {
   return s.substr(a, b - a);
 }
  bool starts_with(const std::string& s, const char* p) { return s.rfind(p, 0) == 0; }
+ /* strip one layer of matching surrounding quotes (" or '); used for
+  * counter()/counters() arg normalisation where authors may quote the
+  * separator string. */
+ std::string strip_quotes(const std::string& s) {
+   if (s.size() >= 2 && (s.front() == '"' || s.front() == '\'') && s.back() == s.front())
+     return s.substr(1, s.size() - 2);
+   return s;
+ }
 
 /* ============================ character references ============================ */
 struct EntEntry { const char* name; const char* utf8; };

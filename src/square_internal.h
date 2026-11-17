@@ -84,7 +84,7 @@ struct GradSpec {
 struct Shadow { Color color; float dx = 0, dy = 0, blur = 0, spread = 0; bool inset = false; };
 
 /* grid track: type + value; minmax keeps nested min/max */
-enum TrackType : uint8_t { TR_AUTO = 0, TR_PX, TR_PCT, TR_FR, TR_MINMAX };
+enum TrackType : uint8_t { TR_AUTO = 0, TR_PX, TR_PCT, TR_FR, TR_MINMAX, TR_SUBGRID };
 struct Track {
   TrackType type = TR_AUTO;
   float v = 0;                   /* px / pct / fr factor */
@@ -232,6 +232,11 @@ struct Rule {
   int origin = 1;                /* 0 = user-agent, 1 = author */
   int order = 0;                 /* document order for tie-breaks */
   bool starting = false;         /* @starting-style rule */
+  /* @container <name>? (<features>) — when non-empty, the rule applies only
+   * to elements whose nearest containing ancestor (container-type != none)
+   * satisfies the size conditions. name_filter empty = "any container". */
+  std::shared_ptr<MediaQuery> container_query;
+  std::string container_name_filter;  /* empty = match any named container */
 };
 
 /* scrollbar appearance (:::webkit-scrollbar-* / scrollbar-width / scrollbar-color) */
@@ -257,6 +262,18 @@ struct StyleSheet {
   ScrollbarStyle sbstyle;             /* last scrollbar declaration wins */
   std::vector<KeyframesRule> keyframes;
   bool has_animations = false;
+  /* View Transitions API: ::view-transition, ::view-transition-group(name),
+   * ::view-transition-image-pair(name), ::view-transition-old(name),
+   * ::view-transition-new(name). These are document-level pseudo-element
+   * rules; we collect them by name so the transition animation step can
+   * read each pair's overriding style. Empty key = the bare ::view-transition
+   * root pseudo (applies to all). */
+  struct VTRule {
+    std::string kind;      /* "" = root, "group", "image-pair", "old", "new" */
+    std::string name;      /* view-transition-name; empty = "*" (matches all) */
+    std::vector<Declaration> decls;
+  };
+  std::vector<VTRule> view_transition_rules;
 };
 
 /* custom properties held per node */
@@ -373,8 +390,6 @@ struct ComputedStyle {
   float mat[6] = {1, 0, 0, 1, 0, 0};     /* a b c d e f */
   float mat4[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}; /* row-major, column-vector */
   bool has_3d = false;                   /* transform uses 3D functions */
-  float mat4[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}; /* row-major, column-vector */
-  bool has_3d = false;                   /* transform uses 3D functions */
   Length tx_ox, tx_oy;                   /* transform-origin, default 50% 50% */
   ObjectFit object_fit = FIT_FILL;
   float aspect_ratio = 0;                /* width/height, 0 = none */
@@ -407,16 +422,7 @@ struct ComputedStyle {
   /* block flow */
   uint8_t snap_type = 0;                 /* scroll-snap-type: 1 = proximity-ish snap on */
   uint8_t snap_align = 0;                /* scroll-snap-align: 1 start, 2 center, 3 end */
-  uint8_t snap_type = 0;                 /* scroll-snap-type on the scroll container */
-  uint8_t snap_align = 0;                /* scroll-snap-align: 1 start, 2 center, 3 end */
   uint8_t clear = 0;                     /* 0 none, 1 left, 2 right, 3 both */
-  /* CSS multicol */
-  int column_count = 0;                  /* 0 = auto (no columns) */
-  Length column_gap;                     /* length; default 16px */
-  uint8_t column_rule_style = 0;         /* 0 none, else like border styles */
-  float column_rule_w = 1;
-  Color column_rule_color{255, 28, 34, 48}; /* currentColor-ish default */
-  bool column_rule_color_set = false;
   /* CSS multicol */
   int column_count = 0;                  /* 0 = auto (no columns) */
   Length column_gap;                     /* length; default 16px */
@@ -437,6 +443,48 @@ struct ComputedStyle {
     std::string timing = "ease";
   };
   std::vector<TransDef> trans_list;
+  /* CSS Containment Module Level 1/2/3:
+   *   contain: <bitmask>  1=size 2=layout 4=paint 8=style 16=inline-size
+   *                        32=block-size 64=strict(=layout+paint+style) 128=content(=layout+paint+style+size)
+   *   content-visibility: 0=visible 1=auto 2=hidden
+   *   contain-intrinsic-size: <w>px <h>px (or "auto <w> <h>"); used as the
+   *     placeholder size when content-visibility:hidden or auto (off-screen)
+   *     skips the subtree's layout. */
+  uint16_t contain_flags = 0;
+  uint8_t content_visibility = 0;          /* 0 visible, 1 auto, 2 hidden */
+  bool contain_intrinsic_set = false;
+  float contain_intrinsic_w = 0;
+  float contain_intrinsic_h = 0;
+  /* container queries: container-type, container-name, and the resolved
+   * container size (filled in by layout). container-type bitmask:
+   *   0=none  1=inline-size  2=block-size  3=size  4=inline-block-size */
+  uint8_t container_type = 0;
+  std::string container_name;              /* empty = "normal" (matches any name) */
+  float container_w = 0, container_h = 0;  /* populated by layout pass */
+  /* view transitions: view-transition-name (empty = none). */
+  std::string view_transition_name;
+  /* anchor positioning: name (anchor-name), the anchor this element is
+   * positioned relative to (position-anchor), and the four resolved insets
+   * produced by anchor() functions inside top/right/bottom/left. */
+  std::string anchor_name;
+  std::string position_anchor;
+  /* per-side anchor spec: when anchor_active[side] is true, the value of
+   *   top/right/bottom/left
+   * is the anchor() function result. anchor_edge[side] selects which edge of
+   * the anchor to align to: 0=top,1=right,2=bottom,3=left,4=center-x,5=center-y,
+   * 6=start,7=end,8=percentage (with anchor_pct[side] giving the % offset). */
+  bool anchor_active[4] = {false, false, false, false};
+  uint8_t anchor_edge[4] = {0, 0, 0, 0};
+  float anchor_pct[4] = {0, 0, 0, 0};
+  /* the resolved px value, computed by layout after the anchor's box is laid
+   * out. layout reads anchor_active and overrides the inset with this. */
+  float anchor_resolved[4] = {0, 0, 0, 0};
+  bool anchor_resolved_ok[4] = {false, false, false, false};
+  /* scroll-driven animations: 0=none, 1=scroll(nearest), 2=scroll(root),
+   * 3=view(nearest), 4=view(root); stored on the animation timeline source
+   * element (the scroll container for scroll(), or the animated element for
+   * view()). */
+  uint8_t anim_timeline_kind = 0;
   /* resolution context */
   bool pseudo_before = false, pseudo_after = false;
 };
@@ -715,6 +763,12 @@ void paint_document(Document* doc, Box* root, Surface* s, ImageCacheView* images
 /* animation-only style update: re-evaluates keyframe values on the existing
  * computed styles WITHOUT the full selector cascade (cheap enough per frame) */
 void style_reanimate(Document* doc, int vw, int vh);
+/* scroll-driven animations: set the current scroll context before calling
+ * style_reanimate(). scroll_y is the document scroll offset in CSS px,
+ * page_h is the total laid-out page height, viewport_h is the visible area.
+ * When set, elements whose animation-timeline is scroll() or view() will
+ * derive their animation progress from scroll position instead of time. */
+void style_set_scroll_anim_ctx(int scroll_y, int viewport_h, int page_h);
 /* CSS transitions (square_style.cpp) */
 void transitions_reset();
 bool css_has_transitions();

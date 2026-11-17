@@ -19,6 +19,23 @@ static std::atomic<bool> g_any_transitions{false};
 static double g_starting_until = -1;
 bool css_starting_active() { return g_any_transitions && anim_time_s() < g_starting_until; }
 
+/* scroll-driven animation context — populated by style_reanimate() from the
+ * instance's current scroll position and page height. Thread-local so the
+ * deep evaluate_animation() recursion can read it without an extra parameter. */
+struct AnimScrollCtx {
+  bool valid = false;
+  int scroll_y = 0;
+  int viewport_h = 0;
+  int page_h = 0;
+  /* for view() timelines: the box of the element whose animation we're
+   * currently evaluating. Set per-element by style_reanimate before calling
+   * evaluate_animation. */
+  const void* elem_box = nullptr;
+  float elem_box_y = 0;
+  float elem_box_h = 0;
+};
+static thread_local AnimScrollCtx g_anim_scroll_ctx;
+
 /* apply one declaration to computed style */
 static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, const std::string& raw_value,
                               ResolveCtx& rc, CustomProps* own_vars) {
@@ -72,6 +89,50 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     return true;
   }
   if (prop == "top" || prop == "right" || prop == "bottom" || prop == "left") {
+    /* anchor positioning: detect "anchor(<edge>[<pct>][, <fallback-length>])"
+     * and store the spec instead of resolving as a normal length. Layout will
+     * find the anchor element (by position-anchor or implicit anchor) and
+     * compute the px offset at layout time. */
+    std::string lv = lc(trim(v));
+    int side_idx = -1;
+    if (prop == "top") side_idx = 0;
+    else if (prop == "right") side_idx = 1;
+    else if (prop == "bottom") side_idx = 2;
+    else if (prop == "left") side_idx = 3;
+    if (lv.rfind("anchor(", 0) == 0) {
+      /* extract arg between first '(' and the matching ')' */
+      size_t rp = lv.rfind(')');
+      if (rp != std::string::npos && rp > 7) {
+        std::string arg = trim(lv.substr(7, rp - 7));
+        /* the first token is the edge keyword or a percentage; any further
+         * comma-separated tokens are fallback lengths which we ignore for
+         * now. */
+        std::string first_tok;
+        size_t comma = arg.find(',');
+        first_tok = trim(comma == std::string::npos ? arg : arg.substr(0, comma));
+        uint8_t edge = 0; float pct = 0;
+        if (first_tok == "top") edge = 0;
+        else if (first_tok == "right") edge = 1;
+        else if (first_tok == "bottom") edge = 2;
+        else if (first_tok == "left") edge = 3;
+        else if (first_tok == "center") edge = 4; /* axis resolved by side */
+        else if (first_tok == "start") edge = 6;
+        else if (first_tok == "end") edge = 7;
+        else if (!first_tok.empty() && first_tok.back() == '%') {
+          edge = 8; pct = (float)atof(first_tok.c_str());
+        } else if (!first_tok.empty() && first_tok.find_first_not_of("0123456789.") == std::string::npos) {
+          edge = 8; pct = (float)atof(first_tok.c_str());
+        }
+        cs->anchor_active[side_idx] = true;
+        cs->anchor_edge[side_idx] = edge;
+        cs->anchor_pct[side_idx] = pct;
+        /* still parse a zero-length so the field is well-defined */
+        cs->anchor_resolved_ok[side_idx] = false;
+        return true;
+      }
+    } else {
+      cs->anchor_active[side_idx] = false;
+    }
     Length L;
     parse_length(substitute_vars(v, rc), &L, rc);
     if (prop == "top") cs->top = L;
@@ -630,6 +691,136 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
     cs->opacity = clamp01(val);
     return true;
   }
+  if (prop == "contain") {
+    /* CSS Containment: parse space-separated keyword list. The spec keywords:
+     *   none | strict | content | size | inline-size | block-size |
+     *   layout | style | paint
+     * 'strict' = layout+style+paint, 'content' = layout+style+paint+size.
+     * Multiple keywords accumulate. "none" clears everything. */
+    std::string s = lc(trim(v));
+    cs->contain_flags = 0;
+    if (s == "none" || s.empty()) return true;
+    if (s == "strict")      { cs->contain_flags = 2|8|4; return true; }
+    if (s == "content")     { cs->contain_flags = 2|8|4|1; return true; }
+    /* composite list */
+    std::string cur;
+    auto flush = [&](const std::string& kw) {
+      if (kw == "size")          cs->contain_flags |= 1;
+      else if (kw == "layout")   cs->contain_flags |= 2;
+      else if (kw == "paint")    cs->contain_flags |= 4;
+      else if (kw == "style")    cs->contain_flags |= 8;
+      else if (kw == "inline-size")  cs->contain_flags |= 16;
+      else if (kw == "block-size")   cs->contain_flags |= 32;
+      else if (kw == "inline-block-size") cs->contain_flags |= (16|32);
+    };
+    for (char c : s) {
+      if (isspace((unsigned char)c)) { if (!cur.empty()) { flush(cur); cur.clear(); } }
+      else cur += c;
+    }
+    if (!cur.empty()) flush(cur);
+    return true;
+  }
+  if (prop == "content-visibility") {
+    std::string s = lc(trim(v));
+    if (s == "visible") cs->content_visibility = 0;
+    else if (s == "auto") cs->content_visibility = 1;
+    else if (s == "hidden") cs->content_visibility = 2;
+    return true;
+  }
+  if (prop == "contain-intrinsic-size" || prop == "contain-intrinsic-width" ||
+      prop == "contain-intrinsic-height") {
+    /* accept forms: "<w>px"  "<w>px <h>px"  "auto <w>px <h>px"  "auto none"
+     * we only honour the numeric px lengths; "auto" prefix is accepted but
+     * size-derivation from last-rendered-size is not stored across passes. */
+    std::string s = lc(trim(v));
+    /* drop a leading "auto" token if present */
+    if (s.rfind("auto", 0) == 0) {
+      s.erase(0, 4);
+      while (!s.empty() && isspace((unsigned char)s[0])) s.erase(s.begin());
+    }
+    /* split remaining into whitespace-separated tokens */
+    std::vector<std::string> toks;
+    std::string cur;
+    for (char c : s) {
+      if (isspace((unsigned char)c)) { if (!cur.empty()) { toks.push_back(cur); cur.clear(); } }
+      else cur += c;
+    }
+    if (!cur.empty()) toks.push_back(cur);
+    float w = 0, h = 0;
+    bool wset = false, hset = false;
+    for (auto& t : toks) {
+      if (t == "none") continue;
+      float val = (float)atof(t.c_str());
+      if (val > 0) {
+        if (!wset) { w = val; wset = true; }
+        else if (!hset) { h = val; hset = true; }
+      }
+    }
+    if (prop == "contain-intrinsic-size") {
+      if (wset) { cs->contain_intrinsic_w = w; cs->contain_intrinsic_set = true; }
+      if (hset) { cs->contain_intrinsic_h = h; cs->contain_intrinsic_set = true; }
+    } else if (prop == "contain-intrinsic-width") {
+      if (wset) { cs->contain_intrinsic_w = w; cs->contain_intrinsic_set = true; }
+    } else { /* height */
+      if (wset) { cs->contain_intrinsic_h = w; cs->contain_intrinsic_set = true; }
+    }
+    return true;
+  }
+  if (prop == "container-type") {
+    std::string s = lc(trim(v));
+    cs->container_type = 0;
+    if (s == "inline-size")      cs->container_type = 1;
+    else if (s == "block-size")  cs->container_type = 2;
+    else if (s == "size")        cs->container_type = 3;
+    else if (s == "inline-block-size") cs->container_type = 4;
+    return true;
+  }
+  if (prop == "container-name") {
+    std::string s = trim(v);
+    if (lc(s) == "none") cs->container_name.clear();
+    else if (lc(s) == "normal") cs->container_name.clear();
+    else {
+      /* strip quotes */
+      if (s.size() >= 2 && (s.front() == '"' || s.front() == '\'') && s.back() == s.front())
+        s = s.substr(1, s.size() - 2);
+      cs->container_name = s;
+    }
+    return true;
+  }
+  if (prop == "view-transition-name") {
+    std::string s = trim(v);
+    if (lc(s) == "none") cs->view_transition_name.clear();
+    else cs->view_transition_name = s;
+    return true;
+  }
+  if (prop == "anchor-name") {
+    std::string s = trim(v);
+    if (lc(s) == "none") cs->anchor_name.clear();
+    else cs->anchor_name = s;
+    return true;
+  }
+  if (prop == "position-anchor") {
+    std::string s = trim(v);
+    if (lc(s) == "auto" || lc(s) == "none") cs->position_anchor.clear();
+    else cs->position_anchor = s;
+    return true;
+  }
+  if (prop == "animation-timeline") {
+    /* accepted forms: "auto" (default), "none", "scroll()", "scroll(nearest/root)",
+     * "view()", "view(nearest/root)" — we record the kind; the actual timeline
+     * progress is computed during reanimate. */
+    std::string s = lc(trim(v));
+    cs->anim_timeline_kind = 0;
+    if (s == "none" || s == "auto") return true;
+    if (s.rfind("scroll(", 0) == 0) {
+      std::string inner = s.substr(7, s.size() - 8);
+      cs->anim_timeline_kind = (inner.find("root") != std::string::npos) ? 2 : 1;
+    } else if (s.rfind("view(", 0) == 0) {
+      std::string inner = s.substr(5, s.size() - 6);
+      cs->anim_timeline_kind = (inner.find("root") != std::string::npos) ? 4 : 3;
+    }
+    return true;
+  }
   if (prop == "box-shadow") {
     parse_box_shadows(substitute_vars(v, rc), cs, rc);
     return true;
@@ -738,8 +929,8 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
       }
       if (!parts.empty()) {
         cs->content_kind = 3;
-        cs->content_name = trim(parts[0], ""'");
-        cs->content_sep = parts.size() > 1 ? trim(parts[1], "\"'") : "";
+        cs->content_name = strip_quotes(trim(parts[0]));
+        cs->content_sep = parts.size() > 1 ? strip_quotes(trim(parts[1])) : "";
         cs->content_set = true;
       }
       return true;
@@ -748,7 +939,7 @@ static bool apply_declaration(ComputedStyle* cs, const std::string& prop_in, con
       std::string inner = s.substr(8, s.size() - 9);
       size_t cm = inner.find(',');
       cs->content_kind = 2;
-      cs->content_name = trim(cm == std::string::npos ? inner : inner.substr(0, cm), "\"'");
+      cs->content_name = strip_quotes(trim(cm == std::string::npos ? inner : inner.substr(0, cm)));
       cs->content_set = true;
       return true;
     }
@@ -1217,12 +1408,127 @@ struct MatchedRule {
   uint32_t sort_key; /* origin<<24 | spec<<8 | order */
 };
 
+/* general performance: CSS rule index by tag.
+ *
+ * The cascade's hot loop is collect_rules_for(), which used to walk every
+ * rule in the stylesheet and try selector_matches() on each. On a Tailwind
+ * page with ~5000 rules, that's 5000 selector-match attempts per element,
+ * most of which fail at the rightmost compound because the tag or class
+ * doesn't match. We pre-build a hash index keyed by the *rightmost*
+ * compound's tag (and "*" / "" for universal rules), so collect_rules_for
+ * can fetch only the rules that could possibly match an element of a given
+ * tag, plus the universal bucket.
+ *
+ * The index is rebuilt whenever the stylesheet changes (style_tree() at
+ * the top of each restyle). Building it is O(rules × selectors) which is
+ * the same cost as a single collect pass, so it pays for itself after one
+ * element's worth of cascade work — and there are always many elements. */
+struct RuleIndex {
+  /* tag -> list of rule* + selector* (pointers into the stylesheet, which
+   * must outlive the index). Stable as long as the StyleSheet's rules
+   * vector isn't resized (style_tree rebuilds the index after a parse). */
+  std::unordered_map<std::string, std::vector<std::pair<const Rule*, const Selector*>>> by_tag;
+  /* rules whose rightmost compound has no tag (e.g. ".foo", "#bar", "*") */
+  std::vector<std::pair<const Rule*, const Selector*>> universal;
+  /* the sheet this index was built from; collect_rules_for compares the
+   * sheet pointer it was given against this to know whether to use the
+   * index or fall back to the linear scan. UA sheet (a different object)
+   * thus falls back to linear scan, which is fine — it's tiny. */
+  const StyleSheet* source = nullptr;
+  bool built = false;
+};
+static RuleIndex g_rule_index;
+
+static void build_rule_index(const StyleSheet& sheet) {
+  g_rule_index.by_tag.clear();
+  g_rule_index.universal.clear();
+  for (const Rule& r : sheet.rules) {
+    if (r.starting) continue; /* starting-style rules need their own gate */
+    for (const Selector& sel : r.sels) {
+      if (sel.parts.empty()) continue;
+      const SelPart& last = sel.parts.back();
+      if (!last.pseudo_element.empty()) continue; /* pseudo-element rules */
+      if (!last.tag.empty() && last.tag != "*") {
+        g_rule_index.by_tag[last.tag].push_back({&r, &sel});
+      } else {
+        g_rule_index.universal.push_back({&r, &sel});
+      }
+    }
+  }
+  g_rule_index.source = &sheet;
+  g_rule_index.built = true;
+}
+
+/* Find the nearest ancestor element of `el` that is a CSS container (has
+ * container_type != 0) and whose container_name matches `name_filter` (empty
+ * filter = any container, including unnamed ones). Returns the computed style
+ * of the container element (which carries container_w / container_h populated
+ * by the previous layout pass) or nullptr when no eligible container exists.
+ *
+ * The spec query context for an element's own @container rules is the nearest
+ * *ancestor* container, not the element itself — so we skip el and start at
+ * el->parent. */
+static const ComputedStyle* find_container_for(const Node* el, const std::string& name_filter) {
+  for (const Node* p = el->parent; p; p = p->parent) {
+    if (p->type != N_ELEMENT) continue;
+    const ComputedStyle* pcs = p->cs;
+    if (!pcs || pcs->container_type == 0) continue;
+    /* name filter: empty = any container; else container_name must equal it
+     * (or container_name empty meaning "no name set, matches only unnamed") */
+    if (!name_filter.empty()) {
+      if (pcs->container_name != name_filter) continue;
+    }
+    return pcs;
+  }
+  return nullptr;
+}
+
 static void collect_rules_for(const Node* el, const StyleSheet& sheet, std::vector<MatchedRule>* out) {
+  /* if the index was built against THIS sheet, use it; otherwise fall back
+   * to the linear scan. The UA sheet is a different object and is small, so
+   * it always goes through the linear path. */
+  if (g_rule_index.built && g_rule_index.source == &sheet) {
+    const auto& tag_bucket = g_rule_index.by_tag.find(el->tag);
+    const std::vector<std::pair<const Rule*, const Selector*>>* buckets[2] = {
+        tag_bucket != g_rule_index.by_tag.end() ? &tag_bucket->second : nullptr,
+        &g_rule_index.universal,
+    };
+    for (int b = 0; b < 2; b++) {
+      if (!buckets[b]) continue;
+      for (const auto& rs : *buckets[b]) {
+        const Rule* r = rs.first;
+        const Selector* sel = rs.second;
+        if (r->starting && !css_starting_active()) continue;
+        /* @container evaluation: walk up from el's parent to find the nearest
+         * container matching the rule's name filter, then evaluate the query
+         * against that container's last-known size. If no eligible container,
+         * the rule does not apply. */
+        if (r->container_query) {
+          const ComputedStyle* ctr = find_container_for(el, r->container_name_filter);
+          if (!ctr) continue;
+          bool ok = r->container_query->eval((int)ctr->container_w, (int)ctr->container_h);
+          if (!ok) continue;
+        }
+        if (selector_matches(el, *sel)) {
+          uint32_t key = (uint32_t)r->origin << 24 | (uint32_t)sel->specificity << 8 | (uint32_t)(r->order & 0xFFFF);
+          out->push_back(MatchedRule{r, sel, key});
+        }
+      }
+    }
+    return;
+  }
+  /* fallback: linear scan (UA sheet, or before first style_tree) */
   for (const Rule& r : sheet.rules) {
     if (r.starting && !css_starting_active()) continue;
+    if (r.container_query) {
+      const ComputedStyle* ctr = find_container_for(el, r.container_name_filter);
+      if (!ctr) continue;
+      bool ok = r.container_query->eval((int)ctr->container_w, (int)ctr->container_h);
+      if (!ok) continue;
+    }
     for (const Selector& sel : r.sels) {
       const std::string& pe = sel.parts.back().pseudo_element;
-      if (!pe.empty()) continue; /* pseudo-element rules handled separately */
+      if (!pe.empty()) continue;
       if (selector_matches(el, sel)) {
         uint32_t key = (uint32_t)r.origin << 24 | (uint32_t)sel.specificity << 8 | (uint32_t)(r.order & 0xFFFF);
         out->push_back(MatchedRule{&r, &sel, key});
@@ -1263,6 +1569,12 @@ static void style_subtree_parallel(Document* doc, int vw, int vh);
 
 void style_tree(Document* doc, int vw, int vh) {
   ua_sheet(); /* ensure built */
+  /* general performance: (re)build the CSS rule index against the document's
+   * stylesheet. The index is consulted by collect_rules_for() to skip rules
+   * whose rightmost compound tag can't possibly match the element being
+   * styled. Rebuild whenever style_tree() is called because the sheet may
+   * have grown (new @import resolved, dynamic <style> insertions, etc.). */
+  build_rule_index(doc->sheet);
   bool first_pass = !doc->starting_done;
   if (first_pass && !doc->sheet.rules.empty()) {
     bool has_starting = false;
@@ -1369,10 +1681,56 @@ static void evaluate_animation(ComputedStyle* cs, const StyleSheet& sheet, Resol
     if (k.name == cs->anim_name) { kr = &k; break; }
   if (!kr || kr->steps.size() < 2) return;
 
-  float t = anim_time_s() - cs->anim_delay;
+  float t;
+  /* scroll-driven animations: when anim_timeline_kind is non-zero the
+   * animation's progress comes from scroll position, not wall-clock time.
+   *   1=scroll(nearest)   2=scroll(root)   3=view(nearest)   4=view(root)
+   * The thread-local scroll context (g_anim_scroll_ctx) is populated by
+   * style_reanimate() from Instance::scroll_y and the root box. For
+   * scroll timelines, progress = scroll_y / (page_h - viewport_h).
+   * For view timelines, progress depends on the element's box position
+   * relative to the viewport (0 when entering, 1 when leaving). */
+  if (cs->anim_timeline_kind != 0 && g_anim_scroll_ctx.valid) {
+    float vh = (float)g_anim_scroll_ctx.viewport_h;
+    float page_h = (float)g_anim_scroll_ctx.page_h;
+    float sy = (float)g_anim_scroll_ctx.scroll_y;
+    if (cs->anim_timeline_kind == 1 || cs->anim_timeline_kind == 2) {
+      /* scroll timeline: 0..1 across the scrollable range. */
+      float range = page_h - vh;
+      if (range <= 0) t = 0;
+      else t = clamp01(sy / range) * cs->anim_duration;
+    } else {
+      /* view timeline: progress based on the element's box position
+       * relative to the viewport. 0 = element bottom at viewport top
+       * (about to enter), 1 = element top at viewport bottom (fully
+       * scrolled past). */
+      if (g_anim_scroll_ctx.elem_box) {
+        /* elem_box is set by style_reanimate() right before calling us,
+         * for the element whose animation we're evaluating. */
+        float ey = g_anim_scroll_ctx.elem_box_y;
+        float eh = g_anim_scroll_ctx.elem_box_h;
+        /* element enters when ey + eh > sy, leaves when ey < sy + vh */
+        float enter = ey + eh - sy;          /* 0 when fully entered */
+        float leave = (sy + vh) - ey;        /* > eh when fully past */
+        /* progress: map [enter=vh, leave=-eh] -> [0, 1] */
+        float span = vh + eh;
+        if (span <= 0) t = 0;
+        else {
+          float prog = (vh - enter) / span;  /* 0 at start, 1 at end */
+          prog = clamp01(prog);
+          t = prog * cs->anim_duration;
+        }
+      } else {
+        t = 0;
+      }
+    }
+    /* skip the wall-clock delay for scroll-driven animations */
+  } else {
+    t = anim_time_s() - cs->anim_delay;
+  }
   if (t < 0) t = 0;
   float prog;
-  if (cs->anim_infinite) {
+  if (cs->anim_infinite && cs->anim_timeline_kind == 0) {
     prog = fmodf(t, cs->anim_duration) / cs->anim_duration;
   } else {
     prog = t / cs->anim_duration;
@@ -1782,6 +2140,15 @@ void style_reanimate(Document* doc, int vw, int vh) {
       rc.vw = (float)vw;
       rc.vh = (float)vh;
       rc.current_color = n->cs->color;
+      /* for view() timelines: stash this element's box position so
+       * evaluate_animation() can compute view progress against the viewport. */
+      if (n->cs->anim_timeline_kind >= 3 && n->box) {
+        g_anim_scroll_ctx.elem_box = n->box;
+        g_anim_scroll_ctx.elem_box_y = n->box->y;
+        g_anim_scroll_ctx.elem_box_h = n->box->h;
+      } else {
+        g_anim_scroll_ctx.elem_box = nullptr;
+      }
       evaluate_animation(n->cs, doc->sheet, rc);
       apply_transitions(n, n->cs);
     }
@@ -1794,11 +2161,19 @@ void style_reanimate(Document* doc, int vw, int vh) {
         rc.vw = (float)vw;
         rc.vh = (float)vh;
         rc.current_color = n->pseudo[pe]->color;
+        g_anim_scroll_ctx.elem_box = nullptr;
         evaluate_animation(n->pseudo[pe], doc->sheet, rc);
       }
     }
     for (Node* c : n->children) walk(c);
   };
   walk(doc->root);
+}
+
+void style_set_scroll_anim_ctx(int scroll_y, int viewport_h, int page_h) {
+  g_anim_scroll_ctx.scroll_y = scroll_y;
+  g_anim_scroll_ctx.viewport_h = viewport_h;
+  g_anim_scroll_ctx.page_h = page_h;
+  g_anim_scroll_ctx.valid = true;
 }
 } /* namespace sqrl */

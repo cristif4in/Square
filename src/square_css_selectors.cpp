@@ -163,6 +163,84 @@ static bool pseudo_class_match(const Node* el, const std::string& pc) {
     }
     return false;
   }
+  if (starts_with(pc, "has(")) {
+    /* :has(<relative-selector>) — the relative selector is evaluated against
+     * el's descendants (and siblings, when the inner selector starts with a
+     * combinator). The spec anchor element is `el`. We support:
+     *   :has(.foo)              any descendant matching .foo
+     *   :has(> .foo)            a child matching .foo
+     *   :has(+ .foo)            an adjacent sibling matching .foo
+     *   :has(~ .foo)            a general sibling matching .foo
+     *   :has(a, b, c)           any of the listed selectors (logical OR)
+     * Implementation: split the inner argument on top-level commas, parse each
+     * as a Selector, then scan el's subtree (or sibling scope) for any node
+     * that satisfies selector_matches against that selector. The first match
+     * wins. Returns false on parse failure of every alternative.
+     */
+    std::string arg = pc.substr(4, pc.size() - 5);
+    std::vector<std::string> list;
+    split_selector_list(arg, &list);
+    if (list.empty()) return false;
+    /* collect candidate scope: descendants by default; for relative
+     * combinators we operate on the parent's children starting after el. */
+    auto collect_descendants = [](const Node* root, std::vector<const Node*>* out) {
+      std::function<void(const Node*)> walk = [&](const Node* n) {
+        for (const Node* c : n->children) {
+          if (c->type == N_ELEMENT) { out->push_back(c); walk(c); }
+          else if (c->type == N_TEXT) walk(c);
+        }
+      };
+      walk(root);
+    };
+    for (auto& one : list) {
+      std::string sel_text = trim(one);
+      if (sel_text.empty()) continue;
+      /* explicit combinator? parse_selector expects a leading compound, so we
+       * strip the leading combinator and track it. Default scope = descendants. */
+      uint8_t leading_comb = 0; /* 0 descendant, 1 child, 2 adjacent, 3 sibling */
+      if (!sel_text.empty() && (sel_text[0] == '>' || sel_text[0] == '+' || sel_text[0] == '~')) {
+        if (sel_text[0] == '>') leading_comb = 1;
+        else if (sel_text[0] == '+') leading_comb = 2;
+        else leading_comb = 3;
+        sel_text.erase(sel_text.begin());
+        sel_text = trim(sel_text);
+        if (sel_text.empty()) continue;
+      }
+      Selector sel;
+      if (!parse_selector(sel_text, &sel)) continue;
+      if (leading_comb == 0 || leading_comb == 1) {
+        /* descendants (any depth for 0, immediate children for 1) */
+        std::vector<const Node*> scope;
+        collect_descendants(el, &scope);
+        for (const Node* cand : scope) {
+          if (leading_comb == 1 && cand->parent != el) continue;
+          if (selector_matches(cand, sel)) return true;
+        }
+      } else {
+        /* siblings: scan parent's children starting from el */
+        if (!el->parent) continue;
+        const auto& sibs = el->parent->children;
+        size_t i = 0;
+        for (; i < sibs.size(); i++) if (sibs[i] == el) break;
+        if (leading_comb == 2) {
+          /* adjacent: nearest preceding element sibling — but :has(+ X) tests
+           * the FOLLOWING sibling per spec; we test the next element after el */
+          for (size_t k = i + 1; k < sibs.size(); k++) {
+            if (sibs[k]->type == N_ELEMENT) {
+              if (selector_matches(sibs[k], sel)) return true;
+              break; /* only the immediately-following element sibling */
+            }
+          }
+        } else {
+          /* general sibling: any element sibling after el */
+          for (size_t k = i + 1; k < sibs.size(); k++) {
+            if (sibs[k]->type == N_ELEMENT && selector_matches(sibs[k], sel)) return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
   return false;
 }
 

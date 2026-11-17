@@ -503,6 +503,36 @@ static float layout_block_columns(Box* b, Node* el, LayoutCtx& lc) {
 /* ============================ element dispatch ============================ */
 float layout_element(Box* b, Node* el, LayoutCtx& lc) {
   ComputedStyle* cs = b->cs;
+  /* content-visibility: hidden — the element's box is laid out but its
+   * contents are not (subtree is skipped entirely). The element itself
+   * retains its specified size, falling back to contain-intrinsic-size if
+   * width/height are auto.
+   *
+   * content-visibility: auto — same as hidden when the element is far from
+   * the viewport (more than 4 viewport heights below the top of the page);
+   * behaves normally otherwise. This is the spec's "rendering is skipped
+   * when not relevant to the user". */
+  if (cs->content_visibility == 2 ||
+      (cs->content_visibility == 1 &&
+       b->y > (float)lc.vh * 4.f /* approximate: skip if far below viewport */)) {
+    /* free any previous layout content */
+    for (auto* k : b->kids) free_box_tree(k);
+    for (auto* o : b->out_of_flow) free_box_tree(o);
+    b->kids.clear();
+    b->out_of_flow.clear();
+    b->frags.clear();
+    /* compute placeholder size: explicit width/height win, else
+     * contain-intrinsic-size, else 0. */
+    float w = b->w, h = b->h;
+    if (cs->width.unit == L_AUTO || cs->width.unit == L_NORMAL)
+      w = cs->contain_intrinsic_set ? cs->contain_intrinsic_w : 0;
+    if (cs->height.unit == L_AUTO || cs->height.unit == L_NORMAL)
+      h = cs->contain_intrinsic_set ? cs->contain_intrinsic_h : 0;
+    b->w = w; b->h = h;
+    b->cw = std::max(0.f, w - b->pad_l - b->pad_r - b->bor_l - b->bor_r);
+    b->ch = std::max(0.f, h - b->pad_t - b->pad_b - b->bor_t - b->bor_b);
+    return b->h;
+  }
   if (cs->column_count > 1) return layout_block_columns(b, el, lc);
   float content_h = 0;
   /* definite height for percentage children: percentages resolve against
@@ -608,7 +638,89 @@ float layout_element(Box* b, Node* el, LayoutCtx& lc) {
     cs->has_transform = true;
   }
   layout_out_of_flow_children(b, el, lc);
+  /* container query support: record this box's content-box dimensions on its
+   * computed style so the next cascade pass can evaluate @container rules
+   * against the actual container size. container_type bitmask:
+   *   1=inline-size (uses container_w), 2=block-size (uses container_h),
+   *   3=size (both), 4=inline-block-size (both, treated same as size here). */
+  if (cs->container_type != 0) {
+    cs->container_w = b->cw;
+    cs->container_h = b->ch;
+  }
   return b->h;
+}
+
+/* resolve anchor() insets on an absolutely-positioned element. Walks up
+ * the DOM tree from `node` to find the nearest element whose anchor_name
+ * matches node->cs->position_anchor (or, when position_anchor is empty, the
+ * default anchor per the spec is the nearest ancestor that establishes an
+ * absolutely-positioned containing block — we approximate by using the
+ * nearest element with an anchor_name). For each side where anchor_active
+ * is set, the resolved px value replaces the regular inset. The anchor
+ * element's box must already have been laid out (this runs after layout
+ * completes on the containing block, which lays out abs children last). */
+static Node* find_anchor_for(Node* node, const std::string& position_anchor) {
+  if (!node) return nullptr;
+  for (Node* p = node->parent; p; p = p->parent) {
+    if (p->type != N_ELEMENT || !p->cs) continue;
+    if (!position_anchor.empty()) {
+      if (p->cs->anchor_name == position_anchor) return p;
+    } else {
+      /* implicit anchor: nearest element with any anchor_name */
+      if (!p->cs->anchor_name.empty()) return p;
+    }
+  }
+  return nullptr;
+}
+
+static void resolve_anchor_insets(Node* node) {
+  ComputedStyle* cs = node->cs;
+  if (!cs) return;
+  bool any = false;
+  for (int i = 0; i < 4; i++) if (cs->anchor_active[i]) { any = true; break; }
+  if (!any) return;
+  Node* anchor = find_anchor_for(node, cs->position_anchor);
+  if (!anchor || !anchor->box) {
+    for (int i = 0; i < 4; i++) cs->anchor_resolved_ok[i] = false;
+    return;
+  }
+  Box* ab = anchor->box;
+  /* anchor box edges in page coordinates */
+  float a_left = ab->x;
+  float a_top = ab->y;
+  float a_right = ab->x + ab->w;
+  float a_bottom = ab->y + ab->h;
+  float a_cx = ab->x + ab->w / 2.f;
+  float a_cy = ab->y + ab->h / 2.f;
+  for (int i = 0; i < 4; i++) {
+    if (!cs->anchor_active[i]) continue;
+    uint8_t edge = cs->anchor_edge[i];
+    float pct = cs->anchor_pct[i];
+    /* side index 0=top, 1=right, 2=bottom, 3=left */
+    float resolved = 0;
+    switch (edge) {
+      case 0: resolved = a_top; break;
+      case 1: resolved = a_right; break;
+      case 2: resolved = a_bottom; break;
+      case 3: resolved = a_left; break;
+      case 4: /* center — pick axis by side */
+        resolved = (i == 0 || i == 2) ? a_cy : a_cx;
+        break;
+      case 6: /* start = same as left/top by axis */
+        resolved = (i == 0 || i == 2) ? a_top : a_left;
+        break;
+      case 7: /* end = same as right/bottom by axis */
+        resolved = (i == 0 || i == 2) ? a_bottom : a_right;
+        break;
+      case 8: /* percentage: along the anchor's inline axis for left/right,
+               * block axis for top/bottom. */
+        if (i == 0 || i == 2) resolved = a_top + pct / 100.f * ab->h;
+        else resolved = a_left + pct / 100.f * ab->w;
+        break;
+    }
+    cs->anchor_resolved[i] = resolved;
+    cs->anchor_resolved_ok[i] = true;
+  }
 }
 
 /* ============================ out of flow (absolute/fixed) ============================ */
@@ -616,20 +728,39 @@ static void layout_out_of_flow_one(Box* b, Node* node, ComputedStyle* ccs, Layou
                                    float cb_x, float cb_y, float cb_w, float cb_h) {
   {
     float em = ccs->font_size;
+    /* anchor positioning: resolve anchor() insets now — the containing block
+     * (and thus the anchor, if it's an in-flow sibling or ancestor) has been
+     * laid out by the time we get here (abs children are positioned last). */
+    resolve_anchor_insets(node);
     Box* cb = new_box(node, b);
     cb->cs = ccs;
     b->out_of_flow.push_back(cb);
     /* resolve width */
     resolve_box_edges(cb, ccs, cb_w, lc);
-    bool has_left = ccs->left.unit != L_AUTO;
-    bool has_right = ccs->right.unit != L_AUTO;
-    bool has_top = ccs->top.unit != L_AUTO;
-    bool has_bottom = ccs->bottom.unit != L_AUTO;
+    /* anchor insets override top/right/bottom/left when active and resolved */
+    bool has_left  = ccs->anchor_resolved_ok[3] || ccs->left.unit != L_AUTO;
+    bool has_right = ccs->anchor_resolved_ok[1] || ccs->right.unit != L_AUTO;
+    bool has_top   = ccs->anchor_resolved_ok[0] || ccs->top.unit != L_AUTO;
+    bool has_bottom= ccs->anchor_resolved_ok[2] || ccs->bottom.unit != L_AUTO;
+    /* helper: resolve a side's inset value, preferring anchor result */
+    auto side_val = [&](int idx, float cb_basis) -> float {
+      if (ccs->anchor_resolved_ok[idx]) return ccs->anchor_resolved[idx];
+      const Length& L = (idx == 0 ? ccs->top : idx == 1 ? ccs->right : idx == 2 ? ccs->bottom : ccs->left);
+      return res_l(L, cb_basis, em, lc);
+    };
     float w = 0;
     if (ccs->width.unit != L_AUTO && ccs->width.unit != L_NORMAL) {
       w = res_l(ccs->width, cb_w, em, lc);
     } else if (has_left && has_right) {
-      w = cb_w - res_l(ccs->left, cb_w, em, lc) - res_l(ccs->right, cb_w, em, lc);
+      /* both insets: derive width from them. anchor insets are in absolute
+       * page coords, so the span is (right - left) — margins handled later. */
+      if (ccs->anchor_resolved_ok[3] || ccs->anchor_resolved_ok[1]) {
+        float lv = side_val(3, cb_w);
+        float rv = side_val(1, cb_w);
+        w = std::max(0.f, rv - lv);
+      } else {
+        w = cb_w - side_val(3, cb_w) - side_val(1, cb_w);
+      }
     } else {
       if (node) {
         w = measure_max_content_width(node, lc);
@@ -649,7 +780,13 @@ static void layout_out_of_flow_one(Box* b, Node* node, ComputedStyle* ccs, Layou
     float predef_h = -1;
     if (has_top && has_bottom) {
       float cbh = cb_h > 0 ? cb_h : (float)lc.vh;
-      predef_h = cbh - res_l(ccs->top, cbh, em, lc) - res_l(ccs->bottom, cbh, em, lc);
+      if (ccs->anchor_resolved_ok[0] || ccs->anchor_resolved_ok[2]) {
+        float tv = side_val(0, cbh);
+        float bv = side_val(2, cbh);
+        predef_h = std::max(0.f, bv - tv);
+      } else {
+        predef_h = cbh - side_val(0, cbh) - side_val(2, cbh);
+      }
       if (predef_h > 0) {
         cb->ch_definite = predef_h - cb->pad_t - cb->pad_b - cb->bor_t - cb->bor_b;
         if (cb->ch_definite < 0) cb->ch_definite = 0;
@@ -677,20 +814,37 @@ static void layout_out_of_flow_one(Box* b, Node* node, ComputedStyle* ccs, Layou
     if (ccs->margin[3].unit == L_AUTO && ccs->margin[1].unit == L_AUTO) {
       ml = std::max(0.f, (cb_w - w) / 2);
     }
-    float x = cb_x + ml;
-    float y = cb_y + mt;
-    if (has_left) x = cb_x + res_l(ccs->left, cb_w, em, lc) + ml;
-    else if (has_right) x = cb_x + cb_w - w - res_l(ccs->right, cb_w, em, lc) - ml;
-    float y_off = 0;
-    if (has_top) y = cb_y + res_l(ccs->top, cb_h > 0 ? cb_h : (float)lc.vh, em, lc) + mt;
-    else if (has_bottom) y = cb_y + (cb_h > 0 ? cb_h : (float)lc.vh) - cb->h - res_l(ccs->bottom, cb_h > 0 ? cb_h : (float)lc.vh, em, lc) - mt;
-    if (ccs->position == P_FIXED) {
+    float x, y;
+    /* anchor-resolved values are absolute page coords; otherwise they're
+     * relative to the containing block (cb_x, cb_y). */
+    if (ccs->anchor_resolved_ok[3]) {
+      x = ccs->anchor_resolved[3] + ml;
+    } else if (has_left) {
+      x = cb_x + side_val(3, cb_w) + ml;
+    } else if (ccs->anchor_resolved_ok[1]) {
+      x = ccs->anchor_resolved[1] - w - ml;
+    } else if (has_right) {
+      x = cb_x + cb_w - w - side_val(1, cb_w) - ml;
+    } else {
+      x = cb_x + ml;
+    }
+    if (ccs->anchor_resolved_ok[0]) {
+      y = ccs->anchor_resolved[0] + mt;
+    } else if (has_top) {
+      y = cb_y + side_val(0, cb_h > 0 ? cb_h : (float)lc.vh) + mt;
+    } else if (ccs->anchor_resolved_ok[2]) {
+      y = ccs->anchor_resolved[2] - cb->h - mt;
+    } else if (has_bottom) {
+      y = cb_y + (cb_h > 0 ? cb_h : (float)lc.vh) - cb->h - side_val(2, cb_h > 0 ? cb_h : (float)lc.vh) - mt;
+    } else {
+      y = cb_y + mt;
+    }
+    if (ccs->position == P_FIXED && !ccs->anchor_resolved_ok[0] && !ccs->anchor_resolved_ok[1] &&
+        !ccs->anchor_resolved_ok[2] && !ccs->anchor_resolved_ok[3]) {
       x = res_l(ccs->left, (float)lc.vw, em, lc);
       if (!has_left && has_right) x = lc.vw - cb->w - res_l(ccs->right, (float)lc.vw, em, lc);
       y = res_l(ccs->top, (float)lc.vh, em, lc);
       if (!has_top && has_bottom) y = lc.vh - cb->h - res_l(ccs->bottom, (float)lc.vh, em, lc);
-      y_off = 0;
-      (void)y_off;
     }
     cb->x = x;
     cb->y = y;
