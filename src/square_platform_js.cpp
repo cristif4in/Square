@@ -457,6 +457,17 @@ class SQNode {
                     ? C.attr(this._ptr, 'src') : undefined; }
   set src(v) { if (v !== undefined) C.setAttr(this._ptr, 'src', String(v)); }
   _is_tag(t) { return this.nodeType === 1 && String(this.tagName || '').toLowerCase() === t; }
+  /* shadow tree: JS-side fragment attached to the element; contents are
+   * queryable from script but not painted by the layout engine */
+  attachShadow(init) {
+    if (this._shadowRoot) return this._shadowRoot;
+    this._shadowRoot = new SQShadowRoot(this, init && init.mode ? init.mode : 'open');
+    return this._shadowRoot;
+  }
+  get shadowRoot() {
+    if (!this._shadowRoot) return null;
+    return this._shadowRoot.mode === 'closed' ? null : this._shadowRoot;
+  }
   set id(v) { C.setAttr(this._ptr, 'id', String(v)); }
   get className() { return C.attr(this._ptr, 'class') || ''; }
   set className(v) { C.setAttr(this._ptr, 'class', String(v)); }
@@ -901,12 +912,84 @@ class SQStorage {
   get length() { return 0; }
 }
 
+/* media query evaluation shared with the CSS engine (same env-driven
+ * scheme/motion flags); supports width/height ranges, media types and the
+ * prefers-* feature queries */
+function __sq_eval_media(q) {
+  q = String(q).trim().replace(/^@media\s+/i, '');
+  if (!q || /^all$/i.test(q)) return true;
+  let negate = false;
+  if (/^not\s+/i.test(q)) { negate = true; q = q.replace(/^not\s+/i, ''); }
+  const scheme = globalThis.__sq_color_scheme || 'light';
+  const reduced = globalThis.__sq_reduced_motion || 'no-preference';
+  let ok = true;
+  const parts = q.split(/\s+and\s+/i);
+  for (let part of parts) {
+    part = part.trim().replace(/^\(/, '').replace(/\)$/, '');
+    if (!part) continue;
+    let val = false;
+    const m = part.match(/^([\w-]+)\s*:\s*(.+)$/);
+    if (m) {
+      const name = m[1].toLowerCase();
+      const v = m[2].trim().toLowerCase();
+      if (name === 'prefers-color-scheme') val = v === scheme;
+      else if (name === 'prefers-reduced-motion') val = v === reduced;
+      else if (name === 'hover') val = v === 'hover';
+      else if (name === 'pointer') val = v === 'fine' || v === 'none';
+      else if (name === 'any-hover') val = v === 'hover';
+      else if (name === 'any-pointer') val = v === 'fine' || v === 'none';
+      else if (name === 'orientation') val = v === 'landscape' ? innerWidth >= innerHeight : innerWidth < innerHeight;
+      else if (name === 'grid') val = false;
+      else if (name === 'resolution' || name === 'color' || name === 'color-index') val = true;
+      else if (/^(min|max)-(width|height|aspect-ratio|resolution)$/.test(name)) {
+        const n = parseFloat(v);
+        const isw = name.endsWith('width');
+        if (!isNaN(n)) {
+          val = name.startsWith('min') ? (isw ? innerWidth >= n : innerHeight >= n)
+                                       : (isw ? innerWidth <= n : innerHeight <= n);
+        }
+      }
+    } else if (/^(min|max)-(width|height)\s*:/i.test(part)) {
+      const mm = part.match(/^(min|max)-(width|height)\s*:\s*([\d.]+)(px|em|rem)?$/i);
+      if (mm) {
+        const n = parseFloat(mm[3]) * (mm[4] && /^(em|rem)$/i.test(mm[4]) ? 16 : 1);
+        const isw = /^width$/i.test(mm[2]);
+        val = /^min/i.test(mm[1]) ? (isw ? innerWidth >= n : innerHeight >= n)
+                                  : (isw ? innerWidth <= n : innerHeight <= n);
+      }
+    } else {
+      val = /^(screen|all)$/i.test(part);
+    }
+    ok = ok && val;
+    if (!ok) break;
+  }
+  return negate ? !ok : ok;
+}
+
+const __mediaLists = new Map(); /* query string -> SQMediaQueryList */
 class SQMediaQueryList {
-  constructor(matches) { this.matches = matches; }
-  addListener() {}
-  removeListener() {}
-  addEventListener() {}
-  removeEventListener() {}
+  constructor(q) {
+    this.media = String(q);
+    this._matches = __sq_eval_media(q);
+    this._ls = new Set();
+    this._onchange = null;
+  }
+  get matches() { return this._matches; }
+  addListener(fn) { if (typeof fn === 'function') this._ls.add(fn); }
+  removeListener(fn) { this._ls.delete(fn); }
+  addEventListener(t, fn) { if (t === 'change' && typeof fn === 'function') this._ls.add(fn); }
+  removeEventListener(t, fn) { this._ls.delete(fn); }
+  dispatchEvent() { return true; }
+  set onchange(fn) { this._onchange = fn; }
+  get onchange() { return this._onchange; }
+  __refresh() {
+    const now = __sq_eval_media(this.media);
+    if (now === this._matches) return;
+    this._matches = now;
+    const ev = { type: 'change', matches: now, media: this.media, target: this };
+    if (this._onchange) { try { this._onchange(ev); } catch (e) {} }
+    for (const fn of [...this._ls]) { try { fn(ev); } catch (e) {} }
+  }
 }
 
 const listeners = new Map();
@@ -956,12 +1039,80 @@ class SQMessageChannel {
   }
 }
 
-// MutationObserver stub
+// MutationObserver: records are produced by the C-binding wrappers below
+const __mutObservers = new Set();
+let __mutDeliverScheduled = false;
 class MutationObserver {
-  constructor(cb) { this._cb = cb; }
-  observe() {}
-  disconnect() {}
-  takeRecords() { return []; }
+  constructor(cb) {
+    this._cb = cb;
+    this._obs = new Map(); /* target -> {childList, attributes, characterData, subtree} */
+    this._records = [];
+    __mutObservers.add(this);
+  }
+  observe(target, options) {
+    if (!target || target._ptr === undefined) return;
+    this._obs.set(target, {
+      childList: !!(options && options.childList),
+      attributes: !!(options && options.attributes) || !!(options && options.attributeFilter),
+      attributeFilter: (options && options.attributeFilter) || null,
+      attributeOldValue: !!(options && options.attributeOldValue),
+      characterData: !!(options && options.characterData),
+      subtree: !!(options && options.subtree),
+    });
+  }
+  unobserve(target) { this._obs.delete(target); }
+  disconnect() { this._obs.clear(); this._records.length = 0; }
+  takeRecords() { const r = this._records; this._records = []; return r; }
+}
+function __mut_descendant(anc, node) {
+  let p = node;
+  while (p) {
+    if (p === anc) return true;
+    p = p.parentNode;
+  }
+  return false;
+}
+function __mut_delivery() {
+  __mutDeliverScheduled = false;
+  for (const ob of __mutObservers) {
+    if (!ob._records.length) continue;
+    const recs = ob._records;
+    ob._records = [];
+    try { ob._cb(recs, ob); } catch (e) {}
+  }
+}
+/* called by the binding wrappers after each DOM change; matching follows the
+ * target/subtree + type options of each observer */
+function __sq_notify_mutation(type, target, opts) {
+  if (!__mutObservers.size) return;
+  const added = opts && opts.added ? opts.added : [];
+  const removed = opts && opts.removed ? opts.removed : [];
+  for (const ob of __mutObservers) {
+    for (const [t, o] of ob._obs) {
+      const inScope = t === target || (o.subtree && __mut_descendant(t, target));
+      if (!inScope) continue;
+      const typeOk = (type === 'childList' && o.childList) ||
+                     (type === 'attributes' && o.attributes) ||
+                     (type === 'characterData' && o.characterData);
+      if (!typeOk) continue;
+      if (type === 'attributes' && o.attributeFilter &&
+          (!opts || !opts.attributeName || o.attributeFilter.indexOf(opts.attributeName) < 0)) continue;
+      ob._records.push({
+        type: type,
+        target: target,
+        addedNodes: added,
+        removedNodes: removed,
+        previousSibling: null,
+        nextSibling: null,
+        attributeName: opts && opts.attributeName ? opts.attributeName : null,
+        oldValue: opts && opts.oldValue !== undefined ? opts.oldValue : null,
+      });
+    }
+  }
+  if (!__mutDeliverScheduled) {
+    __mutDeliverScheduled = true;
+    setTimeout(__mut_delivery, 0);
+  }
 }
 let __obsAny = false;
 const __obsResize = [];
@@ -1013,6 +1164,7 @@ class IntersectionObserver {
   takeRecords() { const r = this._pending; this._pending = []; return r; }
 }
 globalThis.__sq_pump_observers = function() {
+  if (globalThis.__sq_pump_media) globalThis.__sq_pump_media();
   if (!__obsAny) return;
   const jobs = [];
   for (const ro of __obsResize) {
@@ -1294,7 +1446,16 @@ globalThis.localStorage = new SQStorage(
   (k, v) => globalThis.__sq_ls_set(k, v),
   (k) => globalThis.__sq_ls_remove(k));
 globalThis.sessionStorage = globalThis.localStorage;
-globalThis.matchMedia = (q) => new SQMediaQueryList(String(q).includes('prefers-color-scheme: dark') ? false : globalThis.innerWidth >= 0);
+globalThis.matchMedia = (q) => {
+  const key = String(q);
+  let mql = __mediaLists.get(key);
+  if (!mql) { mql = new SQMediaQueryList(key); __mediaLists.set(key, mql); }
+  return mql;
+};
+/* re-evaluate cached query lists (called alongside the observer pump) */
+globalThis.__sq_pump_media = function () {
+  for (const mql of __mediaLists.values()) mql.__refresh();
+};
 /* computed style reader: inline styles take precedence, sensible defaults
  * cover the properties scripts commonly read */
 globalThis.getComputedStyle = (el, pseudo) => {
@@ -1729,7 +1890,114 @@ globalThis.Range = globalThis.Range || function () {
   this.getClientRects = function () { return { length: 0, item: function () { return null; } }; };
 };
 globalThis.__sqListenersKey = listenerKey;
+/* ---- Shadow DOM (API-level: shadow trees live JS-side and are not painted) ---- */
+class SQShadowRoot extends SQFragment {
+  constructor(host, mode) {
+    super();
+    this.host = host;
+    this.mode = mode || 'open';
+  }
+  get innerHTML() {
+    let out = '';
+    for (const c of this._fragment) out += c.outerHTML !== undefined ? c.outerHTML : c.textContent || '';
+    return out;
+  }
+  set innerHTML(v) {
+    this._fragment.length = 0;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = v;
+    for (const c of tmp.childNodes) this._fragment.push(c);
+  }
+}
+globalThis.ShadowRoot = SQShadowRoot;
+globalThis.DocumentFragment = globalThis.DocumentFragment || SQFragment;
+
+/* ---- ReadableStream: pull-style reader over produced chunks ---- */
+class SQReadableStream {
+  constructor(start) {
+    this._chunks = [];
+    this._closed = false;
+    this._err = null;
+    const ctrl = {
+      enqueue: (c) => { this._chunks.push(c); },
+      close: () => { this._closed = true; },
+      error: (e) => { this._err = e || new Error('stream error'); },
+    };
+    if (typeof start === 'function') { try { start(ctrl); } catch (e) { this._err = e; } }
+    else if (start && typeof start.start === 'function') { try { start.start(ctrl); } catch (e) { this._err = e; } }
+  }
+  getReader() {
+    const self = this;
+    return {
+      _i: 0,
+      read() {
+        return new Promise((resolve, reject) => {
+          if (self._err) { reject(self._err); return; }
+          if (self._i < self._chunks.length) resolve({ done: false, value: self._chunks[self._i++] });
+          else resolve({ done: true, value: undefined });
+        });
+      },
+      cancel() { self._chunks.length = 0; self._closed = true; },
+      releaseLock() {},
+    };
+  }
+  cancel() { this._chunks.length = 0; this._closed = true; }
+  get locked() { return false; }
+}
+globalThis.ReadableStream = SQReadableStream;
+
+/* ---- mutation notification: wrap the C DOM bindings so MutationObserver
+ * observers see childList / attributes / characterData changes ---- */
+(function () {
+  const W = (p) => { try { return p === null || p === undefined ? null : wrap(p); } catch (e) { return null; } };
+  const wrapMut = (name, notify) => {
+    const orig = C[name];
+    if (typeof orig !== 'function') return;
+    C[name] = function () {
+      const info = { old: null };
+      try { info.old = notify.before ? notify.before.apply(null, arguments) : null; } catch (e) {}
+      const r = orig.apply(this, arguments);
+      try { notify.after(r, arguments, info); } catch (e) {}
+      return r;
+    };
+  };
+  wrapMut('append', {
+    after(r, args) { __sq_notify_mutation('childList', W(args[0]), { added: [W(args[1])] }); },
+  });
+  wrapMut('insertBefore', {
+    after(r, args) { __sq_notify_mutation('childList', W(args[0]), { added: [W(args[1])] }); },
+  });
+  wrapMut('remove', {
+    before(parent, child) { return W(child); },
+    after(r, args, info) { __sq_notify_mutation('childList', W(args[0]), { removed: [info.old] }); },
+  });
+  wrapMut('removeAll', {
+    before(parent) { return W(parent).childNodes.slice(); },
+    after(r, args, info) { __sq_notify_mutation('childList', W(args[0]), { removed: info.old }); },
+  });
+  wrapMut('setText', {
+    after(r, args) { __sq_notify_mutation('characterData', W(args[0]), {}); },
+  });
+  wrapMut('setAttr', {
+    before(node, name) { return C.attr(node, String(name)); },
+    after(r, args, info) {
+      __sq_notify_mutation('attributes', W(args[0]),
+                           { attributeName: String(args[1]), oldValue: info.old });
+    },
+  });
+  wrapMut('removeAttr', {
+    before(node, name) { return C.attr(node, String(name)); },
+    after(r, args, info) {
+      __sq_notify_mutation('attributes', W(args[0]),
+                           { attributeName: String(args[1]), oldValue: info.old });
+    },
+  });
+  wrapMut('setHtml', {
+    after(r, args) { __sq_notify_mutation('childList', W(args[0]), {}); },
+  });
 })();
+})();
+
 )PRELUDE";
 
 /* ============================ JS console / error reporting ============================ */

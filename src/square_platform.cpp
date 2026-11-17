@@ -1161,19 +1161,56 @@ void page_main(Instance* inst, std::string url) {
     JS_SetPropertyStr(inst->jctx, glob, "__sq_threads", JS_NewInt32(inst->jctx, inst->pool.thread_count()));
     JS_SetPropertyStr(inst->jctx, glob, "__sq_vw", JS_NewInt32(inst->jctx, inst->vw));
     JS_SetPropertyStr(inst->jctx, glob, "__sq_vh", JS_NewInt32(inst->jctx, inst->vh));
+    {
+      const char* sch = getenv("SQRL_COLOR_SCHEME");
+      JS_SetPropertyStr(inst->jctx, glob, "__sq_color_scheme",
+                        JS_NewString(inst->jctx, sch && *sch ? sch : "light"));
+      const char* rm = getenv("SQRL_REDUCED_MOTION");
+      JS_SetPropertyStr(inst->jctx, glob, "__sq_reduced_motion",
+                        JS_NewString(inst->jctx, rm && *rm ? "reduce" : "no-preference"));
+    }
     JS_FreeValue(inst->jctx, glob);
     /* fetch(): JS promise wrapper over the C callback bridge */
     static const char* fetch_patch =
       "(function(){"
+      "function chunkify(str, n) {"
+      "  var out = [];"
+      "  for (var i = 0; i < str.length; i += n) out.push(str.substr(i, n));"
+      "  return out;"
+      "}"
       "globalThis.fetch=function(u,o){"
       "  const url=typeof u==='string'?u:(u&&u.url)||'';"
       "  return new Promise(function(resolve,reject){"
       "    try { globalThis.__sq_fetch_start(url, function(status, body, err){"
       "      if (err) { reject(new TypeError('fetch failed: '+err)); return; }"
+      "      var text = body || '';"
+      "      var chunks = chunkify(text, 65536);"
+      "      var readerPos = 0;"
+      "      var bodyReader = {"
+      "        read: function(){"
+      "          return new Promise(function(res, rej){"
+      "            if (readerPos < chunks.length) res({ done: false, value: chunks[readerPos++] });"
+      "            else res({ done: true, value: undefined });"
+      "          });"
+      "        },"
+      "        cancel: function(){ chunks = []; readerPos = chunks.length; },"
+      "        releaseLock: function(){}"
+      "      };"
       "      resolve({ ok: status>=200&&status<300, status: status, statusText: '',"
-      "        _body: body,"
-      "        text: function(){ return Promise.resolve(this._body||''); },"
-      "        json: function(){ try { return Promise.resolve(JSON.parse(this._body||'null')); } catch(e) { return Promise.reject(new SyntaxError('bad json')); } },"
+      "        _body: text,"
+      "        body: {"
+      "          getReader: function(){ return bodyReader; },"
+      "          cancel: function(){ chunks = []; readerPos = chunks.length; },"
+      "          locked: false"
+      "        },"
+      "        text: function(){ return Promise.resolve(text); },"
+      "        arrayBuffer: function(){"
+      "          var ab = new Uint8Array(text.length);"
+      "          for (var i = 0; i < text.length; i++) ab[i] = text.charCodeAt(i) & 0xff;"
+      "          return Promise.resolve(ab.buffer);"
+      "        },"
+      "        blob: function(){ return Promise.resolve({ size: text.length, type: '' }); },"
+      "        json: function(){ try { return Promise.resolve(JSON.parse(text||'null')); } catch(e) { return Promise.reject(new SyntaxError('bad json')); } },"
       "        headers: { get: function(){ return null; } }"
       "      });"
       "    }); } catch(e) { reject(e); }"

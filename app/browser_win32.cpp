@@ -187,6 +187,53 @@ static RECT tab_rect(size_t i) {
 
 static bool ctrl_down() { return (GetKeyState(VK_CONTROL) & 0x8000) != 0; }
 
+/* clipboard read/write for the address field */
+static bool ui_copy_to_clipboard(HWND hwnd, const std::string& utf8) {
+  if (!OpenClipboard(hwnd)) return false;
+  EmptyClipboard();
+  int wn = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
+  HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, (size_t)wn * sizeof(wchar_t));
+  if (h) {
+    wchar_t* p = (wchar_t*)GlobalLock(h);
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, p, wn);
+    GlobalUnlock(h);
+    SetClipboardData(CF_UNICODETEXT, h);
+  }
+  CloseClipboard();
+  return h != nullptr;
+}
+static std::string ui_paste_from_clipboard(HWND hwnd) {
+  std::string out;
+  if (!OpenClipboard(hwnd)) return out;
+  HANDLE h = GetClipboardData(CF_UNICODETEXT);
+  if (h) {
+    wchar_t* p = (wchar_t*)GlobalLock(h);
+    if (p) {
+      int n = WideCharToMultiByte(CP_UTF8, 0, p, -1, nullptr, 0, nullptr, nullptr);
+      if (n > 0) {
+        out.resize(n - 1);
+        WideCharToMultiByte(CP_UTF8, 0, p, -1, &out[0], n, nullptr, nullptr);
+        /* strip a trailing CR from CRLF pastes */
+        while (!out.empty() && (out.back() == '\r' || out.back() == '\n')) out.pop_back();
+      }
+      GlobalUnlock(h);
+    }
+  }
+  CloseClipboard();
+  return out;
+}
+static std::string addr_selected_text() {
+  size_t a = std::min(g_ui.sel_a, g_ui.sel_b), b = std::max(g_ui.sel_a, g_ui.sel_b);
+  return a < b ? g_ui.address.substr(a, b - a) : g_ui.address;
+}
+static void addr_paste(HWND hwnd) {
+  std::string text = ui_paste_from_clipboard(hwnd);
+  if (text.empty()) return;
+  addr_insert(text);
+  RECT tb = {0, 0, g_ui.vw, TOOLBAR_H};
+  InvalidateRect(hwnd, &tb, FALSE);
+}
+
 /* rounded pill-shaped address field with magnifier glyph, placeholder,
  * selection highlight and blinking caret */
 static void ui_draw_address(HDC dc) {
@@ -484,6 +531,20 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       }
       if (!g_ui.addr_focused) break;
       if (wp == VK_RETURN) ui_navigate_current();
+      else if (ctrl_down() && wp == 'C') {
+        if (!addr_has_sel()) addr_select_all();
+        ui_copy_to_clipboard(hwnd, addr_selected_text());
+        RECT tb = {0, 0, g_ui.vw, TOOLBAR_H};
+        InvalidateRect(hwnd, &tb, FALSE);
+      } else if (ctrl_down() && wp == 'X') {
+        if (!addr_has_sel()) addr_select_all();
+        ui_copy_to_clipboard(hwnd, addr_selected_text());
+        addr_delete_sel();
+        RECT tb = {0, 0, g_ui.vw, TOOLBAR_H};
+        InvalidateRect(hwnd, &tb, FALSE);
+      } else if (ctrl_down() && wp == 'V') {
+        addr_paste(hwnd);
+      }
       else if (wp == VK_ESCAPE) {
         g_ui.address.clear();
         addr_caret_end();

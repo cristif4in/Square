@@ -71,6 +71,8 @@ struct BrowserUI {
   bool addr_focused = true;
   size_t caret = 0;
   size_t sel_a = 0, sel_b = 0; /* byte offsets; selection active when a != b */
+  std::string clip;            /* text we own on the CLIPBOARD selection */
+  bool paste_pending = false;
   square_instance* inst = nullptr;
   int last_state = -1;
   double last_repaint = 0;
@@ -350,6 +352,24 @@ int run_x11(square_instance* inst, const std::string& url, int vw, int vh) {
 
   Atom wm_delete = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
   XSetWMProtocols(dpy, win, &wm_delete, 1);
+  /* clipboard atoms for the address field */
+  Atom a_clip = XInternAtom(dpy, "CLIPBOARD", False);
+  Atom a_utf8 = XInternAtom(dpy, "UTF8_STRING", False);
+  Atom a_prop = XInternAtom(dpy, "SQ_CLIP_PROP", False);
+  auto addr_selected = [&ui]() -> std::string {
+    size_t a = std::min(ui.sel_a, ui.sel_b), b = std::max(ui.sel_a, ui.sel_b);
+    return a < b ? ui.address.substr(a, b - a) : ui.address;
+  };
+  auto addr_copy = [&]() {
+    if (!addr_has_sel(ui)) addr_select_all(ui);
+    ui.clip = addr_selected();
+    XSetSelectionOwner(dpy, a_clip, win, CurrentTime);
+  };
+  auto addr_paste_local = [&]() {
+    if (!ui.clip.empty()) {
+      addr_insert(ui, ui.clip);
+    }
+  };
 
   bool quit = false;
   while (!quit) {
@@ -377,6 +397,20 @@ int run_x11(square_instance* inst, const std::string& url, int vw, int vh) {
         } else if (ctrl && sym == XK_l) {
           ui.addr_focused = true;
           addr_select_all(ui);
+        } else if (ctrl && sym == XK_c && ui.addr_focused) {
+          addr_copy();
+        } else if (ctrl && sym == XK_x && ui.addr_focused) {
+          addr_copy();
+          addr_delete_sel(ui);
+        } else if (ctrl && sym == XK_v && ui.addr_focused) {
+          Window owner = XGetSelectionOwner(dpy, a_clip);
+          if (owner == win) {
+            addr_paste_local();
+          } else if (owner != None) {
+            ui.paste_pending = true;
+            XDeleteProperty(dpy, win, a_prop);
+            XConvertSelection(dpy, a_clip, a_utf8, a_prop, win, CurrentTime);
+          }
         } else if (ui.addr_focused) {
           if (sym == XK_Return) {
             ui_navigate(ui, ui.address);
@@ -467,6 +501,40 @@ int run_x11(square_instance* inst, const std::string& url, int vw, int vh) {
           if (sy > scroll_max) sy = scroll_max;
           square_set_scroll(ui.cur_inst(), sy);
         }
+      } else if (ev.type == SelectionNotify && ui.paste_pending) {
+        ui.paste_pending = false;
+        Atom ptype = None;
+        int fmt = 0;
+        unsigned long n = 0, left = 0;
+        unsigned char* data = nullptr;
+        if (XGetWindowProperty(dpy, win, a_prop, 0, 1 << 16, True, AnyPropertyType,
+                               &ptype, &fmt, &n, &left, &data) == Success && data && n > 0) {
+          std::string text((const char*)data, n);
+          /* strip a trailing CR from CRLF pastes */
+          while (!text.empty() && (text.back() == '\r' || text.back() == '\n')) text.pop_back();
+          if (!text.empty()) addr_insert(ui, text);
+          XFree(data);
+        }
+      } else if (ev.type == SelectionRequest) {
+        XSelectionRequestEvent* req = &ev.xselectionrequest;
+        XSelectionEvent snd;
+        memset(&snd, 0, sizeof(snd));
+        snd.type = SelectionNotify;
+        snd.display = req->display;
+        snd.requestor = req->requestor;
+        snd.selection = req->selection;
+        snd.target = req->target;
+        snd.property = req->property;
+        snd.time = req->time;
+        if ((req->target == a_utf8 || req->target == XA_STRING) && !ui.clip.empty()) {
+          XChangeProperty(dpy, req->requestor, req->property, req->target, 8, PropModeReplace,
+                          (const unsigned char*)ui.clip.data(), (int)ui.clip.size());
+        } else {
+          snd.property = None;
+        }
+        XSendEvent(dpy, req->requestor, False, 0, (XEvent*)&snd);
+      } else if (ev.type == SelectionClear) {
+        ui.clip.clear();
       } else if (ev.type == ClientMessage) {
         if ((Atom)ev.xclient.data.l[0] == wm_delete) quit = true;
       }

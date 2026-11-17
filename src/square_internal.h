@@ -203,8 +203,8 @@ struct MediaQuery {
         std::string cur = sch ? sch : "light";
         m = v == cur;
       } else if (n == "prefers-reduced-motion") {
-        /* engine always animates: only "no-preference" matches */
-        m = v == "no-preference";
+        const char* rm = getenv("SQRL_REDUCED_MOTION");
+        m = v == (rm && *rm ? "reduce" : "no-preference");
       } else if (n == "hover") {
         m = v == "hover"; /* pointer-driven desktop UI */
       } else if (n == "pointer") {
