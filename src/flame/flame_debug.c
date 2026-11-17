@@ -15,11 +15,6 @@ int flame_debug_level = -1;  /* -1 = not yet parsed */
 static int flame_stats_atexit_registered;
 static JSRuntime *flame_stats_rt;
 
-void flame_set_stats_rt(JSRuntime *rt)
-{
-    flame_stats_rt = rt;
-}
-
 int flame_debug_init(void)
 {
     if (flame_debug_level >= 0)
@@ -77,44 +72,10 @@ void flame_global_init(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Public API                                                          */
-/* ------------------------------------------------------------------ */
-
-static int flame_global_enabled = 1;
-
-void flame_set_global_enabled(int enabled)
+/* Stats teardown hook (impl in flame_rt.c owns counters). */
+void flame_set_stats_rt(JSRuntime *rt)
 {
-    flame_global_enabled = !!enabled;
-}
-
-int flame_set_enabled(JSRuntime *rt, int enabled)
-{
-    /* per-runtime state lands with flame_rt.c; global gate for now */
-    (void)rt;
-    int prev = flame_global_enabled;
-    flame_global_enabled = !!enabled;
-    return prev;
-}
-
-int flame_is_enabled(JSRuntime *rt)
-{
-    (void)rt;
-    return flame_global_enabled;
-}
-
-void flame_dump_stats(JSRuntime *rt)
-{
-    (void)rt;
-    fprintf(stderr,
-            "[flame %s] stats: ic_hits=%llu ic_misses=%llu\n",
-            FLAME_VERSION,
-            (unsigned long long)flame_stat_ic_hits,
-            (unsigned long long)flame_stat_ic_misses);
-}
-
-void flame_reset_stats(JSRuntime *rt)
-{
-    (void)rt;
+    flame_stats_rt = rt;
 }
 
 const char *flame_version(void)

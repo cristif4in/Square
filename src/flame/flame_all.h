@@ -16,6 +16,7 @@
 #include "flame_debug.c"
 #include "flame_profiler.c"
 #include "flame_ic.c"
+#include "flame_rt.c"
 
 /* flame_rt.c — runtime state, tiering policy, executable memory  (phase 4) */
 /* emitter_x64.c / emitter_arm64.c — machine emitters             (phase 5/6) */

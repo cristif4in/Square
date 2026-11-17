@@ -298,6 +298,10 @@ struct JSRuntime {
     int shape_hash_count; /* number of hashed shapes */
     JSShape **shape_hash;
     void *user_opaque;
+#if CONFIG_FLAME
+    /* Flame JIT per-runtime state (FlameRT, owned by src/flame/flame_rt.c) */
+    void *flame_rt;
+#endif
 };
 
 struct JSClass {
@@ -648,6 +652,7 @@ typedef struct JSFunctionBytecode {
      * function goes hot; freed in free_function_bytecode(). */
     uint32_t flame_exec_count;
     void *flame_prof;
+    void *flame_compiled;  /* FlameCompiledFunc* when running JIT tiers */
 #endif
 } JSFunctionBytecode;
 
@@ -2049,6 +2054,11 @@ void JS_FreeRuntime(JSRuntime *rt)
                    (uint64_t)(s->malloc_count - 1), &"s"[s->malloc_count == 2]);
         }
     }
+#endif
+
+#if CONFIG_FLAME
+    /* Flame JIT: release JIT code cache and per-runtime state. */
+    flame_rt_dispose(rt);
 #endif
 
     {

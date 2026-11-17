@@ -150,6 +150,52 @@ void flame_ic_free_profile(struct JSRuntime *rt, struct FlameProfile *prof);
 extern uint64_t flame_stat_ic_hits, flame_stat_ic_misses;
 
 /* ------------------------------------------------------------------ */
+/* Runtime state + executable memory (flame_rt.c)                      */
+/* ------------------------------------------------------------------ */
+
+/* Global JIT statistics. */
+extern uint64_t flame_stat_compiles, flame_stat_compile_fails;
+extern uint64_t flame_stat_jit_calls, flame_stat_deopts, flame_stat_osr;
+extern uint64_t flame_stat_native_bytes;
+
+/* A compiled function: native code + backlink, registered in the
+ * per-runtime code cache. */
+typedef struct FlameCompiledFunc {
+    struct FlameCompiledFunc *next;
+    struct JSFunctionBytecode *b; /* backlink (not owned) */
+    uint8_t *code;                /* inside an exec block */
+    size_t code_size;
+    void *osr_map;                /* loop-header -> native offset map */
+    int osr_count;
+    uint8_t tier;                 /* 2 = baseline, 3 = optimizing */
+} FlameCompiledFunc;
+
+/* Executable memory (VirtualAlloc / mmap). */
+void *flame_exec_alloc(size_t size);
+void flame_exec_free(void *ptr, size_t size);
+void flame_exec_flush_icache(void *ptr, size_t size);
+
+/* Runtime plumbing. */
+int flame_global_enabled_flag(void);
+int flame_rt_is_enabled(struct JSRuntime *rt);
+void flame_rt_dispose(struct JSRuntime *rt);
+/* Allocate a fresh executable block of `size` bytes. */
+struct FlameExecBlock {
+    uint8_t *base;
+    size_t size, used;
+};
+typedef struct FlameExecBlock FlameExecBlock;
+typedef struct FlameCompiledFunc FlameCompiledFunc;
+typedef struct FlameProfile FlameProfile;
+typedef struct FlameICSite FlameICSite;
+typedef struct FlameCallSite FlameCallSite;
+typedef struct FlameLoop FlameLoop;
+struct FlameExecBlock *flame_rt_new_block(struct JSRuntime *rt, size_t size);
+void flame_rt_register_func(struct JSRuntime *rt, struct JSFunctionBytecode *b,
+                            void *code, size_t code_size, uint8_t tier);
+void flame_set_stats_rt(struct JSRuntime *rt);
+
+/* ------------------------------------------------------------------ */
 /* Hook entry points (called from quickjs.c, defined in Flame sources) */
 /* ------------------------------------------------------------------ */
 
