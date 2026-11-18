@@ -24,6 +24,7 @@ void fl_init(FlameEmitter *e, void *buf, size_t cap)
 
 int fl_label(FlameEmitter *e)                { (void)e; e->ok = 0; return 0; }
 void fl_bind(FlameEmitter *e, int label)     { (void)e; (void)label; }
+void fl_bind_offset(FlameEmitter *e, int l, size_t t){ (void)e; (void)l; (void)t; }
 void fl_jmp(FlameEmitter *e, int label)      { (void)e; (void)label; e->ok = 0; }
 void fl_jcc(FlameEmitter *e, FlCond c, int l){ (void)e; (void)c; (void)l; e->ok = 0; }
 void fl_call(FlameEmitter *e, void *f, FlReg a) { (void)e; (void)f; (void)a; e->ok = 0; }

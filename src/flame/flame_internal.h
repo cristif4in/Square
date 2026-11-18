@@ -109,7 +109,8 @@ typedef struct FlameICSite {
     uint32_t pc_off;      /* bytecode offset of the access site */
     uint8_t  kind;        /* FLAME_IC_FIELD / FLAME_IC_ELEM */
     uint8_t  cached;      /* a shape/prop_idx cache entry is live */
-    struct JSShape *shape;/* owned reference (field ICs only) */
+    struct JSShape *shape;/* unowned hint; validated via epoch */
+    uint32_t epoch;       /* shape-epoch at cache time (field ICs only) */
     uint32_t prop_idx;    /* index into shape->prop[] (field ICs only) */
     JSAtom    atom;       /* site's constant atom (field ICs only) */
     uint8_t  elem_kind;   /* FLAME_KIND feedback for element loads */

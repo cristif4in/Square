@@ -20,7 +20,7 @@ if "%1"=="msvc" goto msvc
 :minGW
 echo [1/4] QuickJS + fonts + zlib (C)
 for %%f in (quickjs libregexp libunicode cutils dtoa) do (
-  gcc -c -O2 -I%QJS% -D_GNU_SOURCE -DCONFIG_VERSION=\"!QVER!\" %QJS%\%%f.c -o %OUT%\qjs_%%f.o
+  gcc -c -O2 -g -I%QJS% -D_GNU_SOURCE -DCONFIG_VERSION=\"!QVER!\" %QJS%\%%f.c -o %OUT%\qjs_%%f.o
 )
 gcc -c -O2 thirdparty\fonts_embed.c -o %OUT%\fonts_embed.o
 for %%f in (adler32 crc32 inflate inffast inftrees zutil deflate trees) do (

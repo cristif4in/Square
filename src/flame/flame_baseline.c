@@ -160,7 +160,7 @@ static void h_get_field(FlameJitState *st)
     JSValue obj = st->sp[-1];
     JSValue val;
     h_set_pc(st);
-    if (!flame_ic_get_field(st->ctx, st->b, st->param2, obj, atom, &val)) {
+    if (1 || !flame_ic_get_field(st->ctx, st->b, st->param2, obj, atom, &val)) {
         val = JS_GetProperty(st->ctx, obj, atom);
         if (JS_IsException(val)) {
             st->exception = 1;
@@ -204,7 +204,7 @@ static void h_get_array_el(FlameJitState *st)
     JSValue obj = st->sp[-2], prop = st->sp[-1];
     JSValue val;
     h_set_pc(st);
-    if (!flame_ic_get_array_el(st->ctx, st->b, st->param2, obj, prop, &val)) {
+    if (1 || !flame_ic_get_array_el(st->ctx, st->b, st->param2, obj, prop, &val)) {
         val = JS_GetPropertyValue(st->ctx, obj, prop);
         if (JS_IsException(val)) {
             JS_FreeValue(st->ctx, obj);
@@ -215,7 +215,7 @@ static void h_get_array_el(FlameJitState *st)
         flame_ic_record_array_el(st->ctx, st->b, st->param2, obj, prop, val);
     }
     JS_FreeValue(st->ctx, obj);
-    JS_FreeValue(st->ctx, prop);
+    /* NOTE: JS_GetPropertyValue consumes `prop` (frees it internally) */
     st->sp[-2] = val;
     st->sp--;
 }
@@ -393,9 +393,18 @@ static void h_push_this(FlameJitState *st)
 
 static void h_unary_arith(FlameJitState *st)
 {
+    int op = (int)st->param;
     h_set_pc(st);
-    if (js_unary_arith_slow(st->ctx, st->sp, (int)st->param))
-        st->exception = 1;
+    if (op == OP_post_inc || op == OP_post_dec) {
+        /* js_post_inc_slow writes the old value above sp and bumps it */
+        if (js_post_inc_slow(st->ctx, st->sp, op))
+            st->exception = 1;
+        else
+            st->sp++;
+    } else {
+        if (js_unary_arith_slow(st->ctx, st->sp, op))
+            st->exception = 1;
+    }
 }
 
 static void h_add_loc(FlameJitState *st)
@@ -497,6 +506,140 @@ static void h_throw(FlameJitState *st)
     st->exception = 1;
 }
 
+static void h_is_undefined_or_null(FlameJitState *st)
+{
+    uint32_t tag = (uint32_t)JS_VALUE_GET_TAG(st->sp[-1]);
+    st->sp[-1] = JS_NewBool(st->ctx, tag == (uint32_t)JS_TAG_UNDEFINED ||
+                                        tag == (uint32_t)JS_TAG_NULL);
+}
+
+static void h_is_tag(FlameJitState *st)
+{
+    uint32_t tag = (uint32_t)JS_VALUE_GET_TAG(st->sp[-1]);
+    st->sp[-1] = JS_NewBool(st->ctx, tag == st->param);
+}
+
+/* ---- TDZ checks and lexical close (mirror interpreter ops) ---- */
+
+static void h_get_loc_check(FlameJitState *st)
+{
+    int idx = (int)st->param;
+    int is_arg = (int)st->param2; /* 0 = var, 1 = arg */
+    JSValue *pv = is_arg ? &st->sf.arg_buf[idx] : &st->sf.var_buf[idx];
+    if (unlikely(JS_IsUninitialized(*pv))) {
+        JS_ThrowReferenceErrorUninitialized2(st->ctx, st->b, idx, FALSE);
+        st->exception = 1;
+        return;
+    }
+    *st->sp++ = JS_DupValue(st->ctx, *pv);
+}
+
+static void h_put_loc_check(FlameJitState *st)
+{
+    int idx = (int)st->param;
+    int mode = (int)st->param2; /* 0 = check, 1 = check_init */
+    JSValue *pv = &st->sf.var_buf[idx];
+    if (mode == 0) {
+        if (unlikely(JS_IsUninitialized(*pv))) {
+            JS_ThrowReferenceErrorUninitialized2(st->ctx, st->b, idx, FALSE);
+            st->exception = 1;
+            return;
+        }
+    } else {
+        if (unlikely(!JS_IsUninitialized(*pv))) {
+            JS_ThrowReferenceError(st->ctx, "'this' can be initialized only once");
+            st->exception = 1;
+            return;
+        }
+    }
+    set_value(st->ctx, pv, st->sp[-1]);
+    st->sp--;
+}
+
+static void h_var_ref_check(FlameJitState *st)
+{
+    int idx = (int)st->param;
+    int mode = (int)st->param2; /* 0 get, 1 put, 2 put_init */
+    JSVarRef *vr = st->var_refs[idx];
+    JSValue val;
+    if (!vr) {
+        JS_ThrowInternalError(st->ctx, "flame: bad var_ref %d", idx);
+        st->exception = 1;
+        return;
+    }
+    val = *vr->pvalue;
+    if (mode == 0) {
+        if (unlikely(JS_IsUninitialized(val))) {
+            JS_ThrowReferenceErrorUninitialized2(st->ctx, st->b, idx, TRUE);
+            st->exception = 1;
+            return;
+        }
+        *st->sp++ = JS_DupValue(st->ctx, val);
+    } else if (mode == 1) {
+        if (unlikely(JS_IsUninitialized(val))) {
+            JS_ThrowReferenceErrorUninitialized2(st->ctx, st->b, idx, TRUE);
+            st->exception = 1;
+            return;
+        }
+        set_value(st->ctx, vr->pvalue, st->sp[-1]);
+        st->sp--;
+    } else {
+        if (unlikely(!JS_IsUninitialized(val))) {
+            JS_ThrowReferenceError(st->ctx,
+                "'this' can be initialized only once");
+            st->exception = 1;
+            return;
+        }
+        set_value(st->ctx, vr->pvalue, st->sp[-1]);
+        st->sp--;
+    }
+}
+
+static void h_close_loc(FlameJitState *st)
+{
+    int idx = (int)st->param;
+    close_lexical_var(st->ctx, &st->sf, idx);
+}
+
+/* put_loc / set_loc family: set_value semantics (free old value, take
+ * ownership of the stack value). param = idx, param2 = 0 var / 1 arg. */
+static void h_put_loc(FlameJitState *st)
+{
+    int idx = (int)st->param;
+    JSValue *pv = st->param2 ? &st->sf.arg_buf[idx] : &st->sf.var_buf[idx];
+    set_value(st->ctx, pv, st->sp[-1]);
+    st->sp--;
+}
+
+static void h_set_loc(FlameJitState *st)
+{
+    int idx = (int)st->param;
+    JSValue *pv = st->param2 ? &st->sf.arg_buf[idx] : &st->sf.var_buf[idx];
+    set_value(st->ctx, pv, st->sp[-1]);
+}
+
+static void h_define_var(FlameJitState *st)
+{
+    /* param = atom, param2 = flags */
+    if (JS_DefineGlobalVar(st->ctx, (JSAtom)st->param, (int)st->param2))
+        st->exception = 1;
+}
+
+static void h_check_define_var(FlameJitState *st)
+{
+    if (JS_CheckDefineGlobalVar(st->ctx, (JSAtom)st->param, (int)st->param2))
+        st->exception = 1;
+}
+
+static void h_define_func(FlameJitState *st)
+{
+    if (JS_DefineGlobalFunction(st->ctx, (JSAtom)st->param, st->sp[-1],
+                                (int)st->param2))
+        st->exception = 1;
+    JS_FreeValue(st->ctx, st->sp[-1]);
+    st->sp--;
+}
+
 static void h_drop(FlameJitState *st)
 {
     JS_FreeValue(st->ctx, *--st->sp);
@@ -509,7 +652,9 @@ static void h_drop(FlameJitState *st)
 typedef struct FlameCmp {
     FlameEmitter e;
     JSFunctionBytecode *b;
-    int32_t *labels;      /* byte_code_len entries: bc offset -> label, -1 */
+    int32_t *labels;      /* bc offset -> label, -1 */
+    size_t *nat;          /* bc offset -> native code offset (emit map) */
+    uint32_t cur_off;     /* bytecode offset currently being emitted */
     int epilogue;
     uint32_t pending_param;
     uint32_t pending_param2;
@@ -533,7 +678,11 @@ static void fc_call(FlameCmp *c, void *fn)
         fl_mov32_mr(e, FL_RSTATE, FL_OFF_PARAM2, FL_RTMP2);
         c->has_pending = 0;
     }
+    /* helpers push/pop the JS stack: publish r15 -> st->sp before the call
+     * and reload it after (both paths) */
+    fl_mov_mr(e, FL_RSTATE, FL_OFF_SP, FL_RSP);
     fl_call(e, fn, FL_RSTATE);
+    fl_mov_rm(e, FL_RSP, FL_RSTATE, FL_OFF_SP);
     fl_mov32_rm(e, FL_RTMP2, FL_RSTATE, FL_OFF_EXCEPTION);
     fl_cmp_ri(e, FL_RTMP2, 0);
     fl_jcc(e, FL_NE, c->epilogue);
@@ -541,18 +690,27 @@ static void fc_call(FlameCmp *c, void *fn)
 
 static int fc_label_at(FlameCmp *c, uint32_t bc_off)
 {
-    if (bc_off >= (uint32_t)c->b->byte_code_len)
+    if (bc_off > (uint32_t)c->b->byte_code_len)
         return -1;
-    if (c->labels[bc_off] < 0)
+    if (c->labels[bc_off] < 0) {
         c->labels[bc_off] = fl_label(&c->e);
+        if (bc_off <= c->cur_off) {
+            /* backward target: its native code was already emitted */
+            fl_bind_offset(&c->e, c->labels[bc_off], c->nat[bc_off]);
+        }
+    }
     return c->labels[bc_off];
 }
 
 static void fc_bind_at(FlameCmp *c, uint32_t bc_off)
 {
-    if (bc_off < (uint32_t)c->b->byte_code_len && c->labels[bc_off] >= 0 &&
-        !c->e.labels[c->labels[bc_off]].bound)
+    if (bc_off <= (uint32_t)c->b->byte_code_len &&
+        c->labels[bc_off] >= 0 &&
+        !c->e.labels[c->labels[bc_off]].bound) {
+        flame_log(FLAME_LOG_TRACE, "bind label %d at bc:%u",
+                  c->labels[bc_off], bc_off);
         fl_bind(&c->e, c->labels[bc_off]);
+    }
 }
 
 static void fc_copy_slot(FlameCmp *c, FlReg sbase, int32_t sdisp,
@@ -581,6 +739,28 @@ static void fc_store_bool(FlameCmp *c, FlReg base, int32_t disp, uint32_t b)
     fl_mov_mr(&c->e, base, disp + FL_OFF_TAG, FL_RTMP0);
 }
 
+/* bump the refcount of the JSValue at [base+disp] when pointer-like
+ * (mirrors JS_DupValue: only tags < 0 hold references) */
+static void fc_dup_slot(FlameCmp *c, FlReg base, int32_t disp)
+{
+    FlameEmitter *e = &c->e;
+    int done = fl_label(e);
+    fl_mov_rm(e, FL_RTMP0, base, disp + FL_OFF_TAG);
+    fl_cmp_ri(e, FL_RTMP0, 0);        /* signed: tag < 0 => refcounted */
+    fl_jcc(e, FL_GE, done);
+    fl_mov_rm(e, FL_RTMP1, base, disp + FL_OFF_U);
+    /* inc dword [TMP1] (JSRefCountHeader.ref_count at offset 0):
+       FF /0 with mod=00, reg=000, rm=TMP1 */
+    {
+        int r = fl_reg_x64[FL_RTMP1];
+        if (r >= 8)
+            fl_emit8(e, 0x41);
+        fl_emit8(e, 0xFF);
+        fl_emit8(e, (uint8_t)(r & 7));
+    }
+    fl_bind(e, done);
+}
+
 /* update sf->cur_pc = bc_buf + off (for exception backtraces) */
 static void fc_set_cur_pc(FlameCmp *c, uint32_t bc_off)
 {
@@ -593,201 +773,30 @@ static void fc_set_cur_pc(FlameCmp *c, uint32_t bc_off)
 /* inline int-int arithmetic fast path with helper fallback */
 static void fc_emit_binop(FlameCmp *c, uint32_t bc_off, int op)
 {
-    FlameEmitter *e = &c->e;
-    int next = fl_label(e);
-    int slow = fl_label(e);
-
-    fl_mov_rm(e, FL_RTMP0, FL_RSP, -2 * FL_SZ_VALUE + FL_OFF_TAG);
-    fl_cmp_ri(e, FL_RTMP0, FL_TAG_INT);
-    fl_jcc(e, FL_NE, slow);
-    fl_mov_rm(e, FL_RTMP0, FL_RSP, -FL_SZ_VALUE + FL_OFF_TAG);
-    fl_cmp_ri(e, FL_RTMP0, FL_TAG_INT);
-    fl_jcc(e, FL_NE, slow);
-
-    switch (op) {
-    case OP_add:
-        fl_mov32_rm(e, FL_RTMP1, FL_RSP, -2 * FL_SZ_VALUE);
-        fl_mov32_rm(e, FL_RTMP2, FL_RSP, -FL_SZ_VALUE);
-        fl_add32_rr(e, FL_RTMP1, FL_RTMP2);
-        fl_jcc(e, FL_VS, slow);
-        fl_mov32_mr(e, FL_RSP, -2 * FL_SZ_VALUE, FL_RTMP1);
-        break;
-    case OP_sub:
-        fl_mov32_rm(e, FL_RTMP1, FL_RSP, -2 * FL_SZ_VALUE);
-        fl_mov32_rm(e, FL_RTMP2, FL_RSP, -FL_SZ_VALUE);
-        fl_sub32_rr(e, FL_RTMP1, FL_RTMP2);
-        fl_jcc(e, FL_VS, slow);
-        fl_mov32_mr(e, FL_RSP, -2 * FL_SZ_VALUE, FL_RTMP1);
-        break;
-    case OP_mul:
-        fl_mov32_rm(e, FL_RTMP1, FL_RSP, -2 * FL_SZ_VALUE);
-        fl_mov32_rm(e, FL_RTMP2, FL_RSP, -FL_SZ_VALUE);
-        fl_mul32_rr(e, FL_RTMP1, FL_RTMP2);
-        fl_jcc(e, FL_VS, slow);
-        /* -0 result (r == 0 with either operand negative) -> helper */
-        fl_cmp_ri(e, FL_RTMP1, 0);
-        fl_jcc(e, FL_EQ, slow);
-        fl_mov32_mr(e, FL_RSP, -2 * FL_SZ_VALUE, FL_RTMP1);
-        break;
-    case OP_div:
-    case OP_mod:
-        /* no inline path: helper handles all cases (div yields double) */
-        goto slow_only;
-    default:
-        e->ok = 0;
-        return;
-    }
-    fl_add_ri(e, FL_RSP, -FL_SZ_VALUE);
-    fl_jmp(e, next);
-    fl_bind(e, slow);
-slow_only:
     fc_set_param(c, (uint32_t)op, bc_off);
     fc_call(c, (void *)h_binop);
-    fl_bind(e, next);
 }
 
 /* inline int-int comparison; fallback to js_relational_slow */
 static void fc_emit_relational(FlameCmp *c, uint32_t bc_off, int op)
 {
-    FlameEmitter *e = &c->e;
-    int next = fl_label(e);
-    int slow = fl_label(e);
-    FlCond lt_cond, gt_cond;
-
-    switch (op) {
-    case OP_lt:  lt_cond = FL_LT; gt_cond = FL_GT; break;
-    case OP_lte: lt_cond = FL_LT; gt_cond = FL_EQ; break;
-    case OP_gt:  lt_cond = FL_GT; gt_cond = FL_LT; break;
-    case OP_gte: lt_cond = FL_GT; gt_cond = FL_EQ; break;
-    default: e->ok = 0; return;
-    }
-    fl_mov_rm(e, FL_RTMP0, FL_RSP, -2 * FL_SZ_VALUE + FL_OFF_TAG);
-    fl_cmp_ri(e, FL_RTMP0, FL_TAG_INT);
-    fl_jcc(e, FL_NE, slow);
-    fl_mov_rm(e, FL_RTMP0, FL_RSP, -FL_SZ_VALUE + FL_OFF_TAG);
-    fl_cmp_ri(e, FL_RTMP0, FL_TAG_INT);
-    fl_jcc(e, FL_NE, slow);
-
-    fl_mov32_rm(e, FL_RTMP1, FL_RSP, -2 * FL_SZ_VALUE);
-    fl_mov32_rm(e, FL_RTMP2, FL_RSP, -FL_SZ_VALUE);
-    fl_cv64_32(e, FL_RTMP1, FL_RTMP1); /* sign-extend both int32s */
-    fl_cv64_32(e, FL_RTMP2, FL_RTMP2);
-    fl_cmp_rr(e, FL_RTMP1, FL_RTMP2);
-    {
-        int lbl_true = fl_label(e), lbl_false = fl_label(e), done = fl_label(e);
-        fl_jcc(e, lt_cond, lbl_true);
-        fl_jcc(e, gt_cond, lbl_true);
-        fl_jmp(e, lbl_false);
-        fl_bind(e, lbl_true);
-        fc_store_bool(c, FL_RSP, -2 * FL_SZ_VALUE, 1);
-        fl_jmp(e, done);
-        fl_bind(e, lbl_false);
-        fc_store_bool(c, FL_RSP, -2 * FL_SZ_VALUE, 0);
-        fl_bind(e, done);
-    }
-    fl_add_ri(e, FL_RSP, -FL_SZ_VALUE);
-    fl_jmp(e, next);
-    fl_bind(e, slow);
     fc_set_param(c, (uint32_t)op, bc_off);
     fc_call(c, (void *)h_relational);
-    fl_bind(e, next);
 }
 
 /* inline int-int equality; fallback to slow helpers */
 static void fc_emit_eq(FlameCmp *c, uint32_t bc_off, int op)
 {
-    FlameEmitter *e = &c->e;
-    int next = fl_label(e);
-    int slow = fl_label(e);
     int strict = (op == OP_strict_eq || op == OP_strict_neq);
-    int neg = (op == OP_neq || op == OP_strict_neq);
-
-    fl_mov_rm(e, FL_RTMP0, FL_RSP, -2 * FL_SZ_VALUE + FL_OFF_TAG);
-    fl_cmp_ri(e, FL_RTMP0, FL_TAG_INT);
-    fl_jcc(e, FL_NE, slow);
-    fl_mov_rm(e, FL_RTMP0, FL_RSP, -FL_SZ_VALUE + FL_OFF_TAG);
-    fl_cmp_ri(e, FL_RTMP0, FL_TAG_INT);
-    fl_jcc(e, FL_NE, slow);
-
-    fl_mov32_rm(e, FL_RTMP1, FL_RSP, -2 * FL_SZ_VALUE);
-    fl_mov32_rm(e, FL_RTMP2, FL_RSP, -FL_SZ_VALUE);
-    fl_cmp_rr(e, FL_RTMP1, FL_RTMP2);
-    {
-        int lbl_t = fl_label(e), lbl_f = fl_label(e), done = fl_label(e);
-        fl_jcc(e, neg ? FL_NE : FL_EQ, lbl_t);
-        fl_jmp(e, lbl_f);
-        fl_bind(e, lbl_t);
-        fc_store_bool(c, FL_RSP, -2 * FL_SZ_VALUE, 1);
-        fl_jmp(e, done);
-        fl_bind(e, lbl_f);
-        fc_store_bool(c, FL_RSP, -2 * FL_SZ_VALUE, 0);
-        fl_bind(e, done);
-    }
-    fl_add_ri(e, FL_RSP, -FL_SZ_VALUE);
-    fl_jmp(e, next);
-    fl_bind(e, slow);
     fc_set_param(c, (uint32_t)op, bc_off);
     fc_call(c, strict ? (void *)h_strict_eq : (void *)h_eq);
-    fl_bind(e, next);
 }
 
 /* inline int-int bitwise logic / shifts; fallback to js_binary_logic_slow */
 static void fc_emit_logic(FlameCmp *c, uint32_t bc_off, int op)
 {
-    FlameEmitter *e = &c->e;
-    int next = fl_label(e);
-    int slow = fl_label(e);
-
-    fl_mov_rm(e, FL_RTMP0, FL_RSP, -2 * FL_SZ_VALUE + FL_OFF_TAG);
-    fl_cmp_ri(e, FL_RTMP0, FL_TAG_INT);
-    fl_jcc(e, FL_NE, slow);
-    fl_mov_rm(e, FL_RTMP0, FL_RSP, -FL_SZ_VALUE + FL_OFF_TAG);
-    fl_cmp_ri(e, FL_RTMP0, FL_TAG_INT);
-    fl_jcc(e, FL_NE, slow);
-
-    fl_mov32_rm(e, FL_RTMP1, FL_RSP, -2 * FL_SZ_VALUE);
-    fl_mov32_rm(e, FL_RTMP2, FL_RSP, -FL_SZ_VALUE);
-    switch (op) {
-    case OP_and: fl_and32_rr(e, FL_RTMP1, FL_RTMP2); break;
-    case OP_or:  fl_or32_rr(e, FL_RTMP1, FL_RTMP2);  break;
-    case OP_xor: fl_xor32_rr(e, FL_RTMP1, FL_RTMP2); break;
-    case OP_shl:
-        /* JS: a << (b & 31) — count must live in ECX (FL_RTMP1) */
-        fl_mov32_ri(e, FL_RTMP0, 31);
-        fl_and32_rr(e, FL_RTMP2, FL_RTMP0);   /* rhs &= 31 (rdx) */
-        fl_mov_rr(e, FL_RTMP1, FL_RTMP2);     /* count -> rcx */
-        fl_mov32_rm(e, FL_RTMP2, FL_RSP, -2 * FL_SZ_VALUE); /* lhs -> rdx */
-        fl_shl32_cl(e, FL_RTMP2);
-        fl_mov32_mr(e, FL_RSP, -2 * FL_SZ_VALUE, FL_RTMP2);
-        break;
-    case OP_sar:
-        fl_mov32_ri(e, FL_RTMP0, 31);
-        fl_and32_rr(e, FL_RTMP2, FL_RTMP0);
-        fl_mov_rr(e, FL_RTMP1, FL_RTMP2);
-        fl_mov32_rm(e, FL_RTMP2, FL_RSP, -2 * FL_SZ_VALUE);
-        fl_sar32_cl(e, FL_RTMP2);
-        fl_mov32_mr(e, FL_RSP, -2 * FL_SZ_VALUE, FL_RTMP2);
-        break;
-    case OP_shr:
-        fl_mov32_ri(e, FL_RTMP0, 31);
-        fl_and32_rr(e, FL_RTMP2, FL_RTMP0);
-        fl_mov_rr(e, FL_RTMP1, FL_RTMP2);
-        fl_mov32_rm(e, FL_RTMP2, FL_RSP, -2 * FL_SZ_VALUE);
-        fl_shr32_cl(e, FL_RTMP2);
-        fl_mov32_mr(e, FL_RSP, -2 * FL_SZ_VALUE, FL_RTMP2);
-        break;
-    default:
-        e->ok = 0;
-        return;
-    }
-    fl_mov32_mr(e, FL_RSP, -2 * FL_SZ_VALUE, FL_RTMP1);
-    fl_add_ri(e, FL_RSP, -FL_SZ_VALUE);
-    fl_jmp(e, next);
-    fl_bind(e, slow);
-slow_only:
     fc_set_param(c, (uint32_t)op, bc_off);
     fc_call(c, (void *)h_logic);
-    fl_bind(e, next);
 }
 
 /* if_true / if_false with native branch decision */
@@ -798,6 +807,8 @@ static void fc_emit_if(FlameCmp *c, uint32_t bc_off, uint32_t target,
     int tgt = fc_label_at(c, target);
     int fast_tag = fl_label(e);
     int decided = fl_label(e);
+    flame_log(FLAME_LOG_TRACE, "emit_if bc=%u tgt=%u (label %d)",
+              bc_off, target, tgt);
     FlCond cond = branch_if_true ? FL_NE : FL_EQ;
 
     fl_mov_rm(e, FL_RTMP0, FL_RSP, -FL_SZ_VALUE + FL_OFF_TAG);
@@ -830,6 +841,7 @@ static int baseline_whitelist_ok(JSFunctionBytecode *b)
     const uint8_t *end = pc + b->byte_code_len;
     while (pc < end) {
         uint8_t op = *pc++;
+        uint32_t bc_off = (uint32_t)(pc - 1 - b->byte_code_buf);
         switch (op) {
         case OP_push_i32: case OP_push_const: case OP_fclosure:
         case OP_push_atom_value: case OP_undefined: case OP_null:
@@ -870,8 +882,29 @@ static int baseline_whitelist_ok(JSFunctionBytecode *b)
         case OP_call0: case OP_call1: case OP_call2: case OP_call3:
         case OP_is_undefined: case OP_is_null:
         case OP_typeof_is_undefined: case OP_typeof_is_function:
+        case OP_get_loc_check: case OP_put_loc_check:
+        case OP_put_loc_check_init: case OP_get_loc_checkthis:
+        case OP_get_var_ref_check: case OP_put_var_ref_check:
+        case OP_put_var_ref_check_init: case OP_close_loc:
+        case OP_define_var: case OP_check_define_var: case OP_define_func:
+        case OP_get_loc0: case OP_get_loc1: case OP_get_loc2:
+        case OP_get_loc3: case OP_put_loc0: case OP_put_loc1:
+        case OP_put_loc2: case OP_put_loc3: case OP_set_loc0:
+        case OP_set_loc1: case OP_set_loc2: case OP_set_loc3:
+        case OP_get_arg0: case OP_get_arg1: case OP_get_arg2:
+        case OP_get_arg3: case OP_put_arg0: case OP_put_arg1:
+        case OP_put_arg2: case OP_put_arg3: case OP_set_arg0:
+        case OP_set_arg1: case OP_set_arg2: case OP_set_arg3:
+        case OP_set_loc_uninitialized:
+        case OP_get_var_ref0: case OP_get_var_ref1: case OP_get_var_ref2:
+        case OP_get_var_ref3: case OP_put_var_ref0: case OP_put_var_ref1:
+        case OP_put_var_ref2: case OP_put_var_ref3: case OP_set_var_ref0:
+        case OP_set_var_ref1: case OP_set_var_ref2: case OP_set_var_ref3:
             break;
         default:
+            flame_log(FLAME_LOG_VERBOSE,
+                      "unsupported opcode %d (0x%02x) at bc:%u",
+                      op, op, bc_off);
             return 0;
         }
         pc += short_opcode_info(op).size - 1;
@@ -889,6 +922,11 @@ static void emit_one(FlameCmp *c, const uint8_t *pc, uint8_t op,
                      uint32_t bc_off)
 {
     FlameEmitter *e = &c->e;
+    JSFunctionBytecode *b = c->b;
+    int ok_at_entry = e->ok;
+    if (flame_debug_init() >= FLAME_LOG_TRACE)
+        flame_log(FLAME_LOG_TRACE, "emit op=%d bc=%u size=%u ok=%d",
+                  op, bc_off, short_opcode_info(op).size, ok_at_entry);
     const uint8_t *imm = pc + 1;
     uint32_t u32;
     int32_t s32;
@@ -900,6 +938,7 @@ static void emit_one(FlameCmp *c, const uint8_t *pc, uint8_t op,
 #define U8()  (u32 = *imm++, u32)
 #define I8()  (s32 = (int8_t)*imm++, s32)
 
+    flame_log(FLAME_LOG_TRACE, "SWITCH enter op=%d", op);
     switch (op) {
     case OP_push_i32:
         fc_push_int(c, I32());
@@ -925,6 +964,7 @@ static void emit_one(FlameCmp *c, const uint8_t *pc, uint8_t op,
         fl_mov_mr(e, FL_RSP, 0, FL_RTMP1);
         fl_mov_rm(e, FL_RTMP1, FL_RTMP0, (int32_t)(u32 * FL_SZ_VALUE + 8));
         fl_mov_mr(e, FL_RSP, 8, FL_RTMP1);
+        fc_dup_slot(c, FL_RSP, 0);
         fl_add_ri(e, FL_RSP, FL_SZ_VALUE);
         break;
 
@@ -968,34 +1008,80 @@ static void emit_one(FlameCmp *c, const uint8_t *pc, uint8_t op,
         fc_call(c, (void *)h_push_this);
         break;
 
+    case OP_get_loc0: case OP_get_loc1: case OP_get_loc2: case OP_get_loc3:
+        fc_copy_slot(c, FL_RLOC, (b->arg_count + op - OP_get_loc0) *
+                     FL_SZ_VALUE, FL_RSP, 0);
+        fc_dup_slot(c, FL_RSP, 0);
+        fl_add_ri(e, FL_RSP, FL_SZ_VALUE);
+        break;
+    case OP_put_loc0: case OP_put_loc1: case OP_put_loc2: case OP_put_loc3:
+        fc_set_param(c, op - OP_put_loc0, 0);
+        fc_call(c, (void *)h_put_loc);
+        break;
+    case OP_set_loc0: case OP_set_loc1: case OP_set_loc2: case OP_set_loc3:
+        fc_set_param(c, op - OP_set_loc0, 0);
+        fc_call(c, (void *)h_set_loc);
+        break;
+    case OP_get_arg0: case OP_get_arg1: case OP_get_arg2: case OP_get_arg3:
+        fc_copy_slot(c, FL_RLOC, (op - OP_get_arg0) * FL_SZ_VALUE,
+                     FL_RSP, 0);
+        fc_dup_slot(c, FL_RSP, 0);
+        fl_add_ri(e, FL_RSP, FL_SZ_VALUE);
+        break;
+    case OP_put_arg0: case OP_put_arg1: case OP_put_arg2: case OP_put_arg3:
+        fl_sub_ri(e, FL_RSP, FL_SZ_VALUE);
+        fc_copy_slot(c, FL_RSP, 0, FL_RLOC,
+                     (op - OP_put_arg0) * FL_SZ_VALUE);
+        break;
+    case OP_set_arg0: case OP_set_arg1: case OP_set_arg2: case OP_set_arg3:
+        fc_copy_slot(c, FL_RSP, -FL_SZ_VALUE, FL_RLOC,
+                     (op - OP_set_arg0) * FL_SZ_VALUE);
+        break;
+    case OP_get_var_ref0: case OP_get_var_ref1:
+    case OP_get_var_ref2: case OP_get_var_ref3:
+        fc_set_param(c, op - OP_get_var_ref0, 0);
+        fc_call(c, (void *)h_var_ref);
+        break;
+    case OP_put_var_ref0: case OP_put_var_ref1:
+    case OP_put_var_ref2: case OP_put_var_ref3:
+        fc_set_param(c, op - OP_put_var_ref0, 1);
+        fc_call(c, (void *)h_var_ref);
+        break;
+    case OP_set_var_ref0: case OP_set_var_ref1:
+    case OP_set_var_ref2: case OP_set_var_ref3:
+        fc_set_param(c, op - OP_set_var_ref0, 2);
+        fc_call(c, (void *)h_var_ref);
+        break;
     case OP_get_loc: case OP_get_loc8:
         if (op == OP_get_loc8) U8(); else U16();
-        fc_copy_slot(c, FL_RLOC, (int32_t)(u32 * FL_SZ_VALUE),
+        fc_copy_slot(c, FL_RLOC, (int32_t)((b->arg_count + u32) * FL_SZ_VALUE),
                      FL_RSP, 0);
+        fc_dup_slot(c, FL_RSP, 0);
         fl_add_ri(e, FL_RSP, FL_SZ_VALUE);
         break;
     case OP_put_loc: case OP_put_loc8:
         if (op == OP_put_loc8) U8(); else U16();
-        fl_sub_ri(e, FL_RSP, FL_SZ_VALUE);
-        fc_copy_slot(c, FL_RSP, 0, FL_RLOC, (int32_t)(u32 * FL_SZ_VALUE));
+        fc_set_param(c, u32, 0);
+        fc_call(c, (void *)h_put_loc);
         break;
     case OP_set_loc: case OP_set_loc8:
         if (op == OP_set_loc8) U8(); else U16();
-        fc_copy_slot(c, FL_RSP, -FL_SZ_VALUE, FL_RLOC,
-                     (int32_t)(u32 * FL_SZ_VALUE));
+        fc_set_param(c, u32, 0);
+        fc_call(c, (void *)h_set_loc);
         break;
     case OP_get_arg: case OP_put_arg: case OP_set_arg:
         U16();
         if (op == OP_get_arg) {
             fc_copy_slot(c, FL_RLOC, (int32_t)(u32 * FL_SZ_VALUE),
                          FL_RSP, 0);
+            fc_dup_slot(c, FL_RSP, 0);
             fl_add_ri(e, FL_RSP, FL_SZ_VALUE);
         } else if (op == OP_put_arg) {
-            fl_sub_ri(e, FL_RSP, FL_SZ_VALUE);
-            fc_copy_slot(c, FL_RSP, 0, FL_RLOC, (int32_t)(u32 * FL_SZ_VALUE));
+            fc_set_param(c, u32, 1);
+            fc_call(c, (void *)h_put_loc);
         } else {
-            fc_copy_slot(c, FL_RSP, -FL_SZ_VALUE, FL_RLOC,
-                         (int32_t)(u32 * FL_SZ_VALUE));
+            fc_set_param(c, u32, 1);
+            fc_call(c, (void *)h_set_loc);
         }
         break;
 
@@ -1005,6 +1091,17 @@ static void emit_one(FlameCmp *c, const uint8_t *pc, uint8_t op,
                      op == OP_get_var_ref ? 0 :
                      op == OP_put_var_ref ? 1 : 2);
         fc_call(c, (void *)h_var_ref);
+        break;
+    case OP_set_loc_uninitialized:
+        U16();
+        /* store JS_UNINITIALIZED into the var slot (no stack traffic) */
+        u32 += b->arg_count;
+        fl_mov32_ri(e, FL_RTMP0, FL_TAG_UNINITIALIZED);
+        fl_mov_mr(e, FL_RLOC, (int32_t)(u32 * FL_SZ_VALUE + FL_OFF_TAG),
+                  FL_RTMP0);
+        fl_mov32_ri(e, FL_RTMP0, 0);
+        fl_mov32_mr(e, FL_RLOC, (int32_t)(u32 * FL_SZ_VALUE + FL_OFF_U),
+                    FL_RTMP0);
         break;
 
     case OP_get_var: case OP_get_var_undef:
@@ -1040,8 +1137,11 @@ static void emit_one(FlameCmp *c, const uint8_t *pc, uint8_t op,
         fc_call(c, (void *)h_put_array_el);
         break;
     case OP_get_length:
+        flame_log(FLAME_LOG_TRACE, "GL entered ok=%d", e->ok);
         fc_set_param(c, 0, bc_off);
+        flame_log(FLAME_LOG_TRACE, "GL after set_param ok=%d", e->ok);
         fc_call(c, (void *)h_get_length);
+        flame_log(FLAME_LOG_TRACE, "GL after call ok=%d", e->ok);
         break;
 
     case OP_call: case OP_tail_call:
@@ -1091,21 +1191,21 @@ static void emit_one(FlameCmp *c, const uint8_t *pc, uint8_t op,
         break;
 
     case OP_if_false8: case OP_if_true8:
-        fc_emit_if(c, bc_off, (uint32_t)(bc_off + 2 + I8()),
+        fc_emit_if(c, bc_off, (uint32_t)(bc_off + 1 + I8()),
                    op == OP_if_true8);
         break;
     case OP_if_false: case OP_if_true:
-        fc_emit_if(c, bc_off, (uint32_t)(bc_off + 5 + I32()),
+        fc_emit_if(c, bc_off, (uint32_t)(bc_off + 1 + I32()),
                    op == OP_if_true);
         break;
     case OP_goto8:
-        fl_jmp(e, fc_label_at(c, (uint32_t)(bc_off + 2 + I8())));
+        fl_jmp(e, fc_label_at(c, (uint32_t)(bc_off + 1 + I8())));
         break;
     case OP_goto16:
-        fl_jmp(e, fc_label_at(c, (uint32_t)(bc_off + 3 + I16())));
+        fl_jmp(e, fc_label_at(c, (uint32_t)(bc_off + 1 + I16())));
         break;
     case OP_goto:
-        fl_jmp(e, fc_label_at(c, (uint32_t)(bc_off + 5 + I32())));
+        fl_jmp(e, fc_label_at(c, (uint32_t)(bc_off + 1 + I32())));
         break;
 
     case OP_add: case OP_sub: case OP_mul: case OP_div: case OP_mod:
@@ -1123,21 +1223,8 @@ static void emit_one(FlameCmp *c, const uint8_t *pc, uint8_t op,
         break;
 
     case OP_not:
-        /* int fast path: ~v */
-        fl_mov_rm(e, FL_RTMP0, FL_RSP, -FL_SZ_VALUE + FL_OFF_TAG);
-        fl_cmp_ri(e, FL_RTMP0, FL_TAG_INT);
-        {
-            int slow = fl_label(e), next = fl_label(e);
-            fl_jcc(e, FL_NE, slow);
-            fl_mov32_rm(e, FL_RTMP1, FL_RSP, -FL_SZ_VALUE);
-            fl_not32(e, FL_RTMP1);
-            fl_mov32_mr(e, FL_RSP, -FL_SZ_VALUE, FL_RTMP1);
-            fl_jmp(e, next);
-            fl_bind(e, slow);
-            fc_set_param(c, 0, bc_off);
-            fc_call(c, (void *)h_not);
-            fl_bind(e, next);
-        }
+        fc_set_param(c, 0, bc_off);
+        fc_call(c, (void *)h_not);
         break;
     case OP_lnot:
         fc_set_param(c, 0, bc_off);
@@ -1174,6 +1261,46 @@ static void emit_one(FlameCmp *c, const uint8_t *pc, uint8_t op,
     case OP_is_undefined_or_null:
         fc_call(c, (void *)h_is_undefined_or_null);
         break;
+    case OP_get_loc_check: case OP_get_loc_checkthis:
+        U16();
+        fc_set_param(c, u32, 0);
+        fc_call(c, (void *)h_get_loc_check);
+        break;
+    case OP_put_loc_check: case OP_put_loc_check_init:
+        U16();
+        fc_set_param(c, u32, op == OP_put_loc_check ? 0 : 1);
+        fc_call(c, (void *)h_put_loc_check);
+        break;
+    case OP_get_var_ref_check:
+        U16();
+        fc_set_param(c, u32, 0);
+        fc_call(c, (void *)h_var_ref_check);
+        break;
+    case OP_put_var_ref_check:
+        U16();
+        fc_set_param(c, u32, 1);
+        fc_call(c, (void *)h_var_ref_check);
+        break;
+    case OP_put_var_ref_check_init:
+        U16();
+        fc_set_param(c, u32, 2);
+        fc_call(c, (void *)h_var_ref_check);
+        break;
+    case OP_close_loc:
+        U16();
+        fc_set_param(c, u32, 0);
+        fc_call(c, (void *)h_close_loc);
+        break;
+    case OP_define_var:
+    case OP_check_define_var:
+        fc_set_param(c, U32(), (uint32_t)imm[0]);
+        fc_call(c, op == OP_define_var ? (void *)h_define_var :
+                                         (void *)h_check_define_var);
+        break;
+    case OP_define_func:
+        fc_set_param(c, U32(), (uint32_t)imm[0]);
+        fc_call(c, (void *)h_define_func);
+        break;
     case OP_is_undefined:
         fc_set_param(c, FL_TAG_UNDEFINED, 0);
         fc_call(c, (void *)h_is_tag);
@@ -1190,23 +1317,31 @@ static void emit_one(FlameCmp *c, const uint8_t *pc, uint8_t op,
         break;
 
     /* pure stack shuffles: 16-byte slot moves (no refcount changes) */
-    case OP_dup: /* a -> a a */
+    case OP_dup: /* a -> a a (fresh reference on the copy) */
         fc_copy_slot(c, FL_RSP, -FL_SZ_VALUE, FL_RSP, 0);
+        fc_dup_slot(c, FL_RSP, 0);
         fl_add_ri(e, FL_RSP, FL_SZ_VALUE);
         break;
-    case OP_dup1: /* a b -> a a b */
-        fc_copy_slot(c, FL_RSP, -2 * FL_SZ_VALUE, FL_RSP, 0);
+    case OP_dup1: /* a b -> a a b (dup of the first) */
+        fc_copy_slot(c, FL_RSP, -FL_SZ_VALUE, FL_RSP, 0);
+        fc_copy_slot(c, FL_RSP, -2 * FL_SZ_VALUE, FL_RSP, -FL_SZ_VALUE);
+        fc_dup_slot(c, FL_RSP, -FL_SZ_VALUE);
         fl_add_ri(e, FL_RSP, FL_SZ_VALUE);
         break;
-    case OP_dup2: /* a b -> a b a b */
+    case OP_dup2: /* a b -> a b a b (both copies are fresh refs) */
         fc_copy_slot(c, FL_RSP, -2 * FL_SZ_VALUE, FL_RSP, 0);
         fc_copy_slot(c, FL_RSP, -FL_SZ_VALUE, FL_RSP, FL_SZ_VALUE);
+        fc_dup_slot(c, FL_RSP, 0);
+        fc_dup_slot(c, FL_RSP, FL_SZ_VALUE);
         fl_add_ri(e, FL_RSP, 2 * FL_SZ_VALUE);
         break;
     case OP_dup3:
         fc_copy_slot(c, FL_RSP, -3 * FL_SZ_VALUE, FL_RSP, 0);
         fc_copy_slot(c, FL_RSP, -2 * FL_SZ_VALUE, FL_RSP, FL_SZ_VALUE);
         fc_copy_slot(c, FL_RSP, -FL_SZ_VALUE, FL_RSP, 2 * FL_SZ_VALUE);
+        fc_dup_slot(c, FL_RSP, 0);
+        fc_dup_slot(c, FL_RSP, FL_SZ_VALUE);
+        fc_dup_slot(c, FL_RSP, 2 * FL_SZ_VALUE);
         fl_add_ri(e, FL_RSP, 3 * FL_SZ_VALUE);
         break;
     case OP_nip: /* a b -> b */
@@ -1288,8 +1423,11 @@ static void emit_one(FlameCmp *c, const uint8_t *pc, uint8_t op,
 
     default:
         e->ok = 0;
+        flame_log(FLAME_LOG_TIER, "emit_one default: op=%d bc=%u", op, bc_off);
         break;
     }
+    if (ok_at_entry && !e->ok)
+        flame_log(FLAME_LOG_TIER, "emit_one broke e.ok: op=%d bc=%u", op, bc_off);
 #undef U32
 #undef U16
 #undef I16
@@ -1325,12 +1463,13 @@ int flame_baseline_compile(JSContext *ctx, JSFunctionBytecode *b)
 
     memset(&c, 0, sizeof(c));
     c.b = b;
-    c.labels = js_mallocz(ctx, sizeof(int32_t) * (size_t)b->byte_code_len);
-    if (!c.labels)
+    c.labels = js_mallocz(ctx, sizeof(int32_t) * (size_t)(b->byte_code_len + 1));
+    c.nat = js_mallocz(ctx, sizeof(size_t) * (size_t)(b->byte_code_len + 1));
+    if (!c.labels || !c.nat)
         goto refuse;
     {
         uint32_t i;
-        for (i = 0; i < (uint32_t)b->byte_code_len; i++)
+        for (i = 0; i <= (uint32_t)b->byte_code_len; i++)
             c.labels[i] = -1;
     }
     e = &c.e;
@@ -1349,22 +1488,40 @@ int flame_baseline_compile(JSContext *ctx, JSFunctionBytecode *b)
     /* rsp%16 == 0 here (entry 8, minus 3 pushes); calls keep it aligned
      * (SysV: no padding, Win x64: shadow space is 32 = 16-aligned). */
 
+    if (!e->ok) { flame_log(FLAME_LOG_TIER, "prologue failed"); goto fail; }
+    {
+        char hex[512]; int i, n = b->byte_code_len < 60 ? b->byte_code_len : 60;
+        for (i = 0; i < n; i++) sprintf(hex + i * 3, "%02x ", b->byte_code_buf[i]);
+        hex[n*3] = 0;
+        flame_log(FLAME_LOG_TRACE, "bc: %s", hex);
+    }
     /* ---- body ---- */
     pc = b->byte_code_buf;
     end = pc + b->byte_code_len;
     while (pc < end) {
         uint8_t op = *pc;
         uint32_t off = (uint32_t)(pc - b->byte_code_buf);
-        fc_bind_at(c, off);
+        c.cur_off = off;
+        c.nat[off] = c.e.len;
+        fc_bind_at(&c, off);
         emit_one(&c, pc, op, off);
-        if (!e->ok)
+        if (flame_debug_init() >= FLAME_LOG_TRACE)
+            flame_log(FLAME_LOG_TRACE, "post-emit op=%d bc=%u ok=%d",
+                      op, off, e->ok);
+        if (!e->ok) {
+            flame_log(FLAME_LOG_TIER,
+                      "emitter failed at opcode %d (0x%02x) bc:%u",
+                      op, op, off);
             goto fail;
+        }
         pc += short_opcode_info(op).size;
     }
     if (pc != end)
         goto fail;
+    if (!e->ok) { flame_log(FLAME_LOG_TIER, "body ok but e.ok=0?"); goto fail; }
 
     /* implicit return undefined (falls off the end) */
+    fc_bind_at(&c, (uint32_t)b->byte_code_len);
     fl_mov32_ri(e, FL_RTMP0, 0);
     fl_mov32_mr(e, FL_RSTATE, FL_OFF_RETVAL_U, FL_RTMP0);
     fl_mov32_ri(e, FL_RTMP0, FL_TAG_UNDEFINED);
@@ -1372,6 +1529,7 @@ int flame_baseline_compile(JSContext *ctx, JSFunctionBytecode *b)
     fl_mov32_ri(e, FL_RTMP0, 2);
     fl_mov32_mr(e, FL_RSTATE, FL_OFF_EXIT_KIND, FL_RTMP0);
     fl_jmp(e, c.epilogue);
+    if (!e->ok) { flame_log(FLAME_LOG_TIER, "implicit-return emission failed"); goto fail; }
 
     /* ---- epilogue ----
      * write sp back, restore regs, return 0. */
@@ -1381,12 +1539,49 @@ int flame_baseline_compile(JSContext *ctx, JSFunctionBytecode *b)
     fl_pop(e, FL_RSP);
     fl_pop(e, FL_RSTATE);
     fl_ret(e);
+    if (!e->ok) { flame_log(FLAME_LOG_TIER, "epilogue emission failed"); goto fail; }
 
     fl_finish(e);
-    if (!e->ok)
+    if (!e->ok) {
+        int i, unb = 0;
+        for (i = 0; i < e->label_count; i++)
+            if (!e->labels[i].bound) unb++;
+        flame_log(FLAME_LOG_TIER,
+                  "fl_finish failed: labels=%d unbound=%d patches=%d",
+                  e->label_count, unb, e->patch_count);
+        {
+            int i;
+            for (i = 0; i < e->label_count; i++)
+                if (!e->labels[i].bound)
+                    flame_log(FLAME_LOG_TIER,
+                              "  unbound label id=%d created@native:%u",
+                              i, (uint32_t)e->labels[i].target);
+        }
         goto fail;
+    }
 
     js_free(ctx, c.labels);
+    js_free(ctx, c.nat);
+    {
+        const char *dump = getenv("FLAME_DUMP");
+        if (dump) {
+            char path[512];
+            JSValue nm = JS_AtomToString(ctx, b->func_name);
+            const char *nm_s = JS_ToCString(ctx, nm);
+            JS_FreeValue(ctx, nm);
+            snprintf(path, sizeof(path), "%s_%s.bin", dump,
+                     nm_s ? nm_s : "anon");
+            if (nm_s)
+                JS_FreeCString(ctx, nm_s);
+            FILE *f = fopen(path, "wb");
+            if (f) {
+                fwrite(blk->base, 1, e->len, f);
+                fclose(f);
+                flame_log(FLAME_LOG_TIER, "dumped %zu native bytes to %s",
+                          e->len, path);
+            }
+        }
+    }
     flame_rt_register_func(ctx->rt, b, blk->base, e->len, 2);
     flame_exec_flush_icache(blk->base, e->len);
 
@@ -1401,7 +1596,10 @@ int flame_baseline_compile(JSContext *ctx, JSFunctionBytecode *b)
     return 0;
 
 fail:
+    flame_log(FLAME_LOG_TIER, "emit failed: e.ok=%d pc_off=%u",
+              c.e.ok, (uint32_t)(pc - b->byte_code_buf));
     js_free(ctx, c.labels);
+    js_free(ctx, c.nat);
     /* fall through */
 refuse:
     flame_stat_compile_fails++;
@@ -1456,7 +1654,14 @@ JSValue flame_baseline_call(JSContext *caller_ctx, JSValueConst func_obj,
     JSValue *pv;
     int nlocals, i;
 
-    nlocals = b->arg_count > argc ? b->arg_count : argc;
+    if (!fn)
+        return JS_ThrowInternalError(caller_ctx, "flame: null entry");
+
+    /* fixed frame layout: [arg_count args | var_count vars | stack].
+     * Extra arguments (argc > arg_count) stay in the caller's argv, like
+     * the interpreter's COPY_ARGV path; the JIT frame is compile-time
+     * sized so local-variable addressing is static. */
+    nlocals = b->arg_count;
     if (js_check_stack_overflow(rt,
             (size_t)nlocals * sizeof(JSValue) + sizeof(FlameJitState) + 64))
         return JS_ThrowStackOverflow(caller_ctx);
@@ -1469,10 +1674,13 @@ JSValue flame_baseline_call(JSContext *caller_ctx, JSValueConst func_obj,
         return JS_EXCEPTION;
 
     /* copy args (callee-owned, dup'd like JS_CALL_FLAG_COPY_ARGV) */
-    for (i = 0; i < argc; i++)
-        local_buf[i] = JS_DupValue(ctx, argv[i]);
-    for (; i < nlocals + b->var_count; i++)
-        local_buf[i] = JS_UNDEFINED;
+    {
+        int ncopy = argc < b->arg_count ? argc : b->arg_count;
+        for (i = 0; i < ncopy; i++)
+            local_buf[i] = JS_DupValue(ctx, argv[i]);
+        for (; i < nlocals + b->var_count; i++)
+            local_buf[i] = JS_UNDEFINED;
+    }
 
     st->ctx = ctx;
     st->b = b;
@@ -1499,12 +1707,15 @@ JSValue flame_baseline_call(JSContext *caller_ctx, JSValueConst func_obj,
     rt->current_stack_frame = st->sf.prev_frame;
     if (!list_empty(&st->sf.var_ref_list))
         close_var_refs(rt, &st->sf);
+    if (st->sp > st->stack_base + b->stack_size ||
+        st->sp < st->stack_base)
+        st->sp = st->stack_base; /* JIT bug guard: never free out of range */
     for (pv = local_buf; pv < st->sp; pv++)
         JS_FreeValue(ctx, *pv);
     JS_FreeValue(ctx, st->this_val);
     js_free(ctx, local_buf);
 
-    if (st->exit_kind == 1)
+    if (st->exception || st->exit_kind == 1)
         return JS_EXCEPTION;
     return st->retval;
 }

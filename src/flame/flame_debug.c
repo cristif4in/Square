@@ -19,6 +19,9 @@ int flame_debug_init(void)
 {
     if (flame_debug_level >= 0)
         return flame_debug_level;
+    /* crash-proof logging: never buffer diagnostic streams */
+    setvbuf(stderr, NULL, _IONBF, 0);
+    setvbuf(stdout, NULL, _IONBF, 0);
     flame_debug_level = 0;
     {
         const char *env = getenv("FLAME_DEBUG");

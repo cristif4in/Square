@@ -36,8 +36,8 @@ typedef enum FlCond {
     FL_UB, FL_UBE, FL_UA, FL_UAE, FL_VS, FL_VC,
 } FlCond;
 
-#define FL_MAX_LABELS  256
-#define FL_MAX_PATCHES 1024
+#define FL_MAX_LABELS  1024
+#define FL_MAX_PATCHES 8192
 
 typedef struct FlameEmitter {
     uint8_t *buf;
@@ -59,6 +59,7 @@ typedef struct FlameEmitter {
 
 void fl_init(FlameEmitter *e, void *buf, size_t cap);
 void fl_bind(FlameEmitter *e, int label);
+void fl_bind_offset(FlameEmitter *e, int label, size_t target);
 int fl_label(FlameEmitter *e);
 
 /* Control flow */

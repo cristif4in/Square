@@ -25,14 +25,14 @@ enum {
     X_R8, X_R9, X_R10, X_R11, X_R12, X_R13, X_R14, X_R15,
 };
 
-static const int fl_reg_x64[] = {
+static int fl_reg_x64[] = {
     [FL_RTMP0]  = X_RAX,
     [FL_RTMP1]  = X_RCX,
     [FL_RTMP2]  = X_RDX,
     [FL_RSTATE] = X_RBX,
     [FL_RSP]    = X_R15,
     [FL_RLOC]   = X_R14,
-    [FL_RARG]   = X_RDX,  /* placeholder; fl_call uses fl_arg_reg() */
+    [FL_RARG]   = X_RDX,  /* patched to the host ABI's arg register */
     [FL_RCALL]  = X_R11,
 };
 
@@ -44,6 +44,11 @@ static int fl_arg_reg(void)
 #else
     return X_RCX;
 #endif
+}
+
+static void fl_reg_init(void)
+{
+    fl_reg_x64[FL_RARG] = fl_arg_reg();
 }
 
 static void fl_emit(FlameEmitter *e, const void *bytes, int n)
@@ -58,12 +63,11 @@ static void fl_emit(FlameEmitter *e, const void *bytes, int n)
 
 static void fl_emit8(FlameEmitter *e, uint8_t b)  { fl_emit(e, &b, 1); }
 
-/* ModRM/SIB addressing: [base + disp]. */
+/* ModRM/SIB addressing: [base + disp].
+ * NOTE: callers pre-emit their own REX byte (they know reg/base), so this
+ * must NOT emit a prefix — it only emits ModRM(+SIB+disp). */
 static void fl_modrm(FlameEmitter *e, int reg, int base, int32_t disp)
 {
-    int rex = 0x40 | (0x4 * (reg >= 8)) | (base >= 8);
-    if (rex != 0x40)
-        fl_emit8(e, (uint8_t)rex);
     if (base == X_RSP || base == X_R12) {
         /* SIB required */
         if (disp == 0) {
@@ -101,12 +105,14 @@ void fl_init(FlameEmitter *e, void *buf, size_t cap)
     e->buf = (uint8_t *)buf;
     e->cap = cap;
     e->ok = 1;
+    fl_reg_init();
 }
 
 int fl_label(FlameEmitter *e)
 {
     if (e->label_count >= FL_MAX_LABELS) { e->ok = 0; return 0; }
     e->labels[e->label_count].bound = 0;
+    e->labels[e->label_count].target = e->len; /* creation offset (debug) */
     return e->label_count++;
 }
 
@@ -116,8 +122,17 @@ void fl_bind(FlameEmitter *e, int label)
     e->labels[label].target = e->len;
 }
 
+void fl_bind_offset(FlameEmitter *e, int label, size_t target)
+{
+    e->labels[label].bound = 1;
+    e->labels[label].target = target;
+}
+
 static void fl_patch_add(FlameEmitter *e, int label, int cond)
 {
+    /* forward references are fine (fl_resolve patches them); only reject
+     * out-of-range labels */
+    if (label < 0 || label >= FL_MAX_LABELS) { e->ok = 0; return; }
     if (e->patch_count >= FL_MAX_PATCHES) { e->ok = 0; return; }
     e->patches[e->patch_count].at = e->len;
     e->patches[e->patch_count].label = label;
@@ -157,9 +172,12 @@ static void fl_resolve(FlameEmitter *e)
     }
     for (i = 0; i < e->patch_count; i++) {
         size_t at = e->patches[i].at;
-        int32_t rel = (int32_t)(e->labels[e->patches[i].label].target -
-                                (at + 4));
-        memcpy(e->buf + at, &rel, 4);
+        int lab = e->patches[i].label;
+        if (lab < 0 || lab >= e->label_count) { e->ok = 0; return; }
+        {
+            int32_t rel = (int32_t)(e->labels[lab].target - (at + 4));
+            memcpy(e->buf + at, &rel, 4);
+        }
     }
 }
 
@@ -192,7 +210,8 @@ void fl_mov_ri32(FlameEmitter *e, FlReg dst, int32_t imm)
 void fl_mov_ri64(FlameEmitter *e, FlReg dst, uint64_t imm)
 {
     int r = fl_reg_x64[dst];
-    if (r >= 8) fl_emit8(e, 0x40 | (r - 8));
+    /* B8+r uses the rm field, extended by REX.B; W=1 for 64-bit */
+    fl_emit8(e, (uint8_t)(0x48 | (r >= 8 ? 1 : 0)));
     fl_emit8(e, 0xB8 + (r & 7));  /* movabs r64, imm64 */
     fl_emit(e, &imm, 8);
 }
@@ -412,7 +431,10 @@ void fl_call(FlameEmitter *e, void *func, FlReg argreg)
         fl_emit8(e, (uint8_t)(0xC0 | ((s & 7) << 3) | (d & 7)));
     }
 #ifndef FL_SYSV
-    fl_sub_ri(e, FL_RSP, 32);           /* shadow store */
+    {   /* machine-rsp shadow store (NOT the value-stack register) */
+        uint8_t sub_rsp[4] = { 0x48, 0x83, 0xEC, 0x20 };
+        uint8_t add_rsp[4] = { 0x48, 0x83, 0xC4, 0x20 };
+        fl_emit(e, sub_rsp, 4);
 #endif
     {
         int r = fl_reg_x64[FL_RCALL];
@@ -421,7 +443,8 @@ void fl_call(FlameEmitter *e, void *func, FlReg argreg)
         fl_emit8(e, (uint8_t)(0xD0 | (r & 7)));
     }
 #ifndef FL_SYSV
-    fl_add_ri(e, FL_RSP, 32);
+        fl_emit(e, add_rsp, 4);
+    }
 #endif
 }
 

@@ -42,10 +42,9 @@ static FlameICSite *ic_site(JSContext *ctx, FlameProfile *prof,
 
 static void ic_invalidate(JSRuntime *rt, FlameICSite *site)
 {
-    if (site->shape) {
-        js_free_shape(rt, site->shape);
-        site->shape = NULL;
-    }
+    /* no reference is held, so nothing to release */
+    (void)rt;
+    site->shape = NULL;
     site->cached = 0;
 }
 
@@ -72,6 +71,7 @@ int flame_ic_get_field(JSContext *ctx, JSFunctionBytecode *b,
         return 0;
 
     if (site->cached && site->shape == p->shape &&
+        site->epoch == ctx->rt->flame_shape_epoch &&
         site->prop_idx < (uint32_t)p->shape->prop_count) {
         prs = &get_shape_prop(p->shape)[site->prop_idx];
         if (prs->atom == atom && !(prs->flags & JS_PROP_TMASK)) {
@@ -108,12 +108,6 @@ void flame_ic_record_field(JSContext *ctx, JSFunctionBytecode *b,
     prs = find_own_property(&pr, p, atom);
     if (!prs || (prs->flags & JS_PROP_TMASK))
         return; /* only cache plain own data properties */
-    /* Only cache hashed shapes. Holding a reference on an unhashed shape
-     * would break quickjs's in-place-mutation invariant (which requires
-     * ref_count == 1); hashed shapes with extra refs are always cloned on
-     * mutation instead, so caching them is safe. */
-    if (!p->shape->is_hashed)
-        return;
     site = ic_site(ctx, prof, pc_off, FLAME_IC_FIELD);
     if (!site)
         return;
@@ -122,9 +116,9 @@ void flame_ic_record_field(JSContext *ctx, JSFunctionBytecode *b,
         return; /* already correct */
     if (site->cached)
         ic_invalidate(ctx->rt, site);
-    site->shape = js_dup_shape(p->shape);
-    if (!site->shape)
-        return;
+    /* no reference held: validity is re-checked via the shape-epoch below */
+    site->shape = p->shape;
+    site->epoch = ctx->rt->flame_shape_epoch;
     site->prop_idx = (uint32_t)(prs - get_shape_prop(p->shape));
     site->atom = atom;
     site->cached = 1;
@@ -203,6 +197,7 @@ void flame_ic_record_array_el(JSContext *ctx, JSFunctionBytecode *b,
 void flame_ic_free_profile(JSRuntime *rt, FlameProfile *prof)
 {
     int i;
-    for (i = 0; i < prof->ic_count; i++)
+    for (i = 0; i < prof->ic_count; i++) {
         ic_invalidate(rt, &prof->ics[i]);
+    }
 }

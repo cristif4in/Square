@@ -119,6 +119,8 @@ void flame_free_profile(JSRuntime *rt, void *profv)
     FlameProfile *prof = (FlameProfile *)profv;
     if (!prof)
         return;
+    flame_log(FLAME_LOG_VERBOSE, "freeing profile %p (ics=%d)", (void *)prof,
+              prof->ic_count);
     flame_ic_free_profile(rt, prof);
     js_free_rt(rt, prof->binop_fb);
     js_free_rt(rt, prof->calls);

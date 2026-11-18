@@ -1042,7 +1042,13 @@ void page_main(Instance* inst, std::string url) {
      * - max stack: 4 MB (was 2 MB), deep React call chains were hitting
      *   the previous limit on complex component trees. */
     JS_SetMemoryLimit(inst->rt, 512 * 1024 * 1024);
-    JS_SetGCThreshold(inst->rt, 8 * 1024 * 1024);
+    {
+        const char *genv = getenv("SQRL_GC_THRESHOLD");
+        if (genv && *genv)
+            JS_SetGCThreshold(inst->rt, (size_t)atoll(genv));
+        else
+            JS_SetGCThreshold(inst->rt, 8 * 1024 * 1024);
+    }
     JS_SetMaxStackSize(inst->rt, 4 * 1024 * 1024);
     inst->jctx = JS_NewContext(inst->rt);
     JS_SetContextOpaque(inst->jctx, inst);

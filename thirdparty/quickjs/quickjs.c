@@ -301,6 +301,9 @@ struct JSRuntime {
 #if CONFIG_FLAME
     /* Flame JIT per-runtime state (FlameRT, owned by src/flame/flame_rt.c) */
     void *flame_rt;
+    /* bumped on every shape death; Flame ICs compare epochs instead of
+     * holding shape references (refcount-free, leak-free) */
+    uint32_t flame_shape_epoch;
 #endif
 };
 
@@ -4761,6 +4764,10 @@ static JSShape *js_dup_shape(JSShape *sh)
 
 static void js_free_shape0(JSRuntime *rt, JSShape *sh)
 {
+#if CONFIG_FLAME
+    /* any shape death invalidates every Flame IC epoch-wide */
+    rt->flame_shape_epoch++;
+#endif
     uint32_t i;
     JSShapeProperty *pr;
 
