@@ -199,10 +199,13 @@ FlameExecBlock *flame_rt_new_block(JSRuntime *rt, size_t size)
 }
 
 void flame_rt_register_func(JSRuntime *rt, JSFunctionBytecode *b,
-                            void *code, size_t code_size, uint8_t tier)
+                            void *code, size_t code_size, uint8_t tier,
+                            const uint32_t *osr_bc, void **osr_entry,
+                            int osr_count, void **slot)
 {
     FlameRT *frt = flame_rt_get(rt);
     FlameCompiledFunc *f;
+    int i;
     if (!frt)
         return;
     f = js_mallocz_rt(rt, sizeof(*f));
@@ -212,10 +215,15 @@ void flame_rt_register_func(JSRuntime *rt, JSFunctionBytecode *b,
     f->code = (uint8_t *)code;
     f->code_size = code_size;
     f->tier = tier;
+    f->osr_count = osr_count > 8 ? 8 : osr_count;
+    for (i = 0; i < f->osr_count; i++) {
+        f->osr[i].bc_off = osr_bc[i];
+        f->osr[i].entry = osr_entry[i];
+    }
     f->next = frt->funcs;
     frt->funcs = f;
     frt->func_count++;
-    b->flame_compiled = f;
+    *slot = f;
     flame_stat_compiles++;
     flame_stat_native_bytes += code_size;
 }

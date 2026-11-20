@@ -23,12 +23,16 @@
 #include "flame_internal.h"
 #include "flame_emitter.h"
 
+static int osr_has_prop_store(JSFunctionBytecode *b);
+
 /* ------------------------------------------------------------------ */
 /* JIT state                                                           */
 /* ------------------------------------------------------------------ */
 
 typedef struct FlameJitState {
-    JSStackFrame sf;
+    JSStackFrame sf;         /* embedded frame (baseline entry path) */
+    JSStackFrame *sfp;       /* active frame: &sf, or the interpreter's live
+                                frame when running an OSR entry */
     JSContext *ctx;          /* b->realm, like the interpreter */
     JSFunctionBytecode *b;
     JSVarRef **var_refs;
@@ -42,8 +46,9 @@ typedef struct FlameJitState {
     uint32_t param;          /* per-site constant for the next helper call */
     uint32_t param2;         /* second constant / helper out-value */
     uint32_t argc;
+    uint32_t deopt_pc;       /* bytecode offset to resume at (tier 3) */
     uint8_t exception;
-    uint8_t exit_kind;       /* 0 running, 1 exception, 2 return */
+    uint8_t exit_kind;       /* 0 running, 1 exception, 2 return, 3 deopt */
 } FlameJitState;
 
 /* Field offsets used by emitted code (ABI-agnostic: everything goes
@@ -56,10 +61,11 @@ typedef struct FlameJitState {
 #define FL_OFF_PARAM2     ((int)offsetof(FlameJitState, param2))
 #define FL_OFF_CPOOL      ((int)offsetof(FlameJitState, cpool))
 #define FL_OFF_BC_BUF     ((int)offsetof(FlameJitState, bc_buf))
+#define FL_OFF_DEOPT_PC   ((int)offsetof(FlameJitState, deopt_pc))
 #define FL_OFF_EXCEPTION  ((int)offsetof(FlameJitState, exception))
 #define FL_OFF_EXIT_KIND  ((int)offsetof(FlameJitState, exit_kind))
-#define FL_OFF_SF_CUR_PC  ((int)offsetof(FlameJitState, sf) + \
-                           (int)offsetof(JSStackFrame, cur_pc))
+#define FL_OFF_SFP        ((int)offsetof(FlameJitState, sfp))
+#define FL_SF_CUR_PC      ((int)offsetof(JSStackFrame, cur_pc))
 
 /* JSValue slot layout: the 64-bit two-struct encoding from quickjs.h
  * (u union at offset 0, int64 tag at offset 8, sizeof == 16). */
@@ -73,6 +79,13 @@ typedef struct FlameJitState {
 #define FL_TAG_UNDEFINED    3
 #define FL_TAG_FLOAT64      8
 #define FL_TAG_UNINITIALIZED 4
+#define FL_TAG_OBJECT      (-1)
+
+/* JSObject field offsets for speculative inline paths (same TU as
+ * quickjs.c, so these are always correct) */
+#define FL_OFF_CLASS_ID   ((int)offsetof(JSObject, class_id))
+#define FL_OFF_ARR_COUNT  ((int)offsetof(JSObject, u.array.count))
+#define FL_OFF_ARR_VALUES ((int)offsetof(JSObject, u.array.u.values))
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -80,7 +93,7 @@ typedef struct FlameJitState {
 
 static void h_set_pc(FlameJitState *st)
 {
-    st->sf.cur_pc = st->bc_buf + st->param2;
+    st->sfp->cur_pc = st->bc_buf + st->param2;
 }
 
 static void h_binop(FlameJitState *st)
@@ -237,9 +250,8 @@ static void h_put_array_el(FlameJitState *st)
     h_set_pc(st);
     ret = JS_SetPropertyValue(st->ctx, obj, st->sp[-2], st->sp[-1],
                               JS_PROP_THROW_STRICT);
+    /* JS_SetPropertyValue consumes prop and val; only obj remains ours */
     JS_FreeValue(st->ctx, obj);
-    JS_FreeValue(st->ctx, st->sp[-2]);
-    JS_FreeValue(st->ctx, st->sp[-1]);
     st->sp -= 3;
     if (ret < 0)
         st->exception = 1;
@@ -350,7 +362,7 @@ static void h_fclosure(FlameJitState *st)
     int idx = (int)st->param;
     JSValue bfunc = JS_DupValue(st->ctx, st->cpool[idx]);
     h_set_pc(st);
-    *st->sp++ = js_closure(st->ctx, bfunc, st->var_refs, &st->sf);
+    *st->sp++ = js_closure(st->ctx, bfunc, st->var_refs, st->sfp);
     if (JS_IsException(st->sp[-1]))
         st->exception = 1;
 }
@@ -410,7 +422,7 @@ static void h_unary_arith(FlameJitState *st)
 static void h_add_loc(FlameJitState *st)
 {
     int idx = (int)st->param;
-    JSValue *pv = &st->sf.var_buf[idx];
+    JSValue *pv = &st->sfp->var_buf[idx];
     JSValue op2 = st->sp[-1];
     if (likely(JS_VALUE_IS_BOTH_INT(*pv, op2))) {
         int64_t r = (int64_t)JS_VALUE_GET_INT(*pv) + JS_VALUE_GET_INT(op2);
@@ -436,7 +448,7 @@ static void h_incdec_loc(FlameJitState *st)
 {
     int idx = (int)st->param;
     int op = (int)st->param2;
-    JSValue *pv = &st->sf.var_buf[idx];
+    JSValue *pv = &st->sfp->var_buf[idx];
     if (likely(JS_VALUE_GET_TAG(*pv) == JS_TAG_INT)) {
         *pv = JS_NewInt32(st->ctx, JS_VALUE_GET_INT(*pv) +
                           (op == OP_inc_loc ? 1 : -1));
@@ -525,7 +537,7 @@ static void h_get_loc_check(FlameJitState *st)
 {
     int idx = (int)st->param;
     int is_arg = (int)st->param2; /* 0 = var, 1 = arg */
-    JSValue *pv = is_arg ? &st->sf.arg_buf[idx] : &st->sf.var_buf[idx];
+    JSValue *pv = is_arg ? &st->sfp->arg_buf[idx] : &st->sfp->var_buf[idx];
     if (unlikely(JS_IsUninitialized(*pv))) {
         JS_ThrowReferenceErrorUninitialized2(st->ctx, st->b, idx, FALSE);
         st->exception = 1;
@@ -538,7 +550,7 @@ static void h_put_loc_check(FlameJitState *st)
 {
     int idx = (int)st->param;
     int mode = (int)st->param2; /* 0 = check, 1 = check_init */
-    JSValue *pv = &st->sf.var_buf[idx];
+    JSValue *pv = &st->sfp->var_buf[idx];
     if (mode == 0) {
         if (unlikely(JS_IsUninitialized(*pv))) {
             JS_ThrowReferenceErrorUninitialized2(st->ctx, st->b, idx, FALSE);
@@ -598,7 +610,7 @@ static void h_var_ref_check(FlameJitState *st)
 static void h_close_loc(FlameJitState *st)
 {
     int idx = (int)st->param;
-    close_lexical_var(st->ctx, &st->sf, idx);
+    close_lexical_var(st->ctx, st->sfp, idx);
 }
 
 /* put_loc / set_loc family: set_value semantics (free old value, take
@@ -606,7 +618,7 @@ static void h_close_loc(FlameJitState *st)
 static void h_put_loc(FlameJitState *st)
 {
     int idx = (int)st->param;
-    JSValue *pv = st->param2 ? &st->sf.arg_buf[idx] : &st->sf.var_buf[idx];
+    JSValue *pv = st->param2 ? &st->sfp->arg_buf[idx] : &st->sfp->var_buf[idx];
     set_value(st->ctx, pv, st->sp[-1]);
     st->sp--;
 }
@@ -614,7 +626,7 @@ static void h_put_loc(FlameJitState *st)
 static void h_set_loc(FlameJitState *st)
 {
     int idx = (int)st->param;
-    JSValue *pv = st->param2 ? &st->sf.arg_buf[idx] : &st->sf.var_buf[idx];
+    JSValue *pv = st->param2 ? &st->sfp->arg_buf[idx] : &st->sfp->var_buf[idx];
     set_value(st->ctx, pv, st->sp[-1]);
 }
 
@@ -649,12 +661,18 @@ static void h_drop(FlameJitState *st)
 /* Compiler                                                            */
 /* ------------------------------------------------------------------ */
 
+#define FL_MAX_OSR_HEADERS 8
+
 typedef struct FlameCmp {
     FlameEmitter e;
     JSFunctionBytecode *b;
+    struct FlameProfile *prof; /* tier-1 feedback (tier 3) */
+    uint8_t tier;              /* 2 = baseline, 3 = optimizing */
     int32_t *labels;      /* bc offset -> label, -1 */
     size_t *nat;          /* bc offset -> native code offset (emit map) */
     uint32_t cur_off;     /* bytecode offset currently being emitted */
+    uint32_t osr_bc[FL_MAX_OSR_HEADERS];   /* backward-jump targets */
+    int osr_count;
     int epilogue;
     uint32_t pending_param;
     uint32_t pending_param2;
@@ -697,6 +715,9 @@ static int fc_label_at(FlameCmp *c, uint32_t bc_off)
         if (bc_off <= c->cur_off) {
             /* backward target: its native code was already emitted */
             fl_bind_offset(&c->e, c->labels[bc_off], c->nat[bc_off]);
+            /* loop header: record as an OSR entry point */
+            if (c->osr_count < FL_MAX_OSR_HEADERS)
+                c->osr_bc[c->osr_count++] = bc_off;
         }
     }
     return c->labels[bc_off];
@@ -739,6 +760,42 @@ static void fc_store_bool(FlameCmp *c, FlReg base, int32_t disp, uint32_t b)
     fl_mov_mr(&c->e, base, disp + FL_OFF_TAG, FL_RTMP0);
 }
 
+/* tier-3 guard failure: record the resume point and exit to the wrapper,
+ * which hands the live frame to the interpreter (flame_deopt_resume) */
+static void fc_deopt(FlameCmp *c, uint32_t bc_off)
+{
+    FlameEmitter *e = &c->e;
+    fl_mov32_ri(e, FL_RTMP0, FLAME_EXIT_DEOPT);
+    fl_mov32_mr(e, FL_RSTATE, FL_OFF_EXIT_KIND, FL_RTMP0);
+    fl_mov32_ri(e, FL_RTMP0, bc_off);
+    fl_mov32_mr(e, FL_RSTATE, FL_OFF_DEOPT_PC, FL_RTMP0);
+    fl_mov_mr(e, FL_RSTATE, FL_OFF_SP, FL_RSP);
+    fl_jmp(e, c->epilogue);
+}
+
+/* element-kind feedback for a get_array_el site (from the tier-1 ICs) */
+static int fc_elem_feedback(FlameCmp *c, uint32_t bc_off)
+{
+    int i;
+    if (!c->prof)
+        return -1;
+    for (i = 0; i < c->prof->ic_count; i++)
+        if (c->prof->ics[i].kind == FLAME_IC_ELEM &&
+            c->prof->ics[i].pc_off == bc_off &&
+            c->prof->ics[i].elem_kind != FLAME_KIND_NONE)
+            return c->prof->ics[i].elem_kind;
+    return -1;
+}
+
+/* feedback byte at a bytecode offset: (lhs<<4)|rhs FlameKind, or -1 */
+static int fc_feedback(FlameCmp *c, uint32_t bc_off)
+{
+    if (!c->prof || !c->prof->binop_fb ||
+        bc_off >= (uint32_t)c->prof->binop_fb_len)
+        return -1;
+    return c->prof->binop_fb[bc_off];
+}
+
 /* bump the refcount of the JSValue at [base+disp] when pointer-like
  * (mirrors JS_DupValue: only tags < 0 hold references) */
 static void fc_dup_slot(FlameCmp *c, FlReg base, int32_t disp)
@@ -767,12 +824,96 @@ static void fc_set_cur_pc(FlameCmp *c, uint32_t bc_off)
     fl_mov_ri32(&c->e, FL_RTMP2, (int32_t)bc_off);
     fl_mov_rm(&c->e, FL_RTMP1, FL_RSTATE, FL_OFF_BC_BUF);
     fl_add_rr(&c->e, FL_RTMP1, FL_RTMP2);
-    fl_mov_mr(&c->e, FL_RSTATE, FL_OFF_SF_CUR_PC, FL_RTMP1);
+    fl_mov_rm(&c->e, FL_RTMP0, FL_RSTATE, FL_OFF_SFP);
+    fl_mov_mr(&c->e, FL_RTMP0, FL_SF_CUR_PC, FL_RTMP1);
 }
 
 /* inline int-int arithmetic fast path with helper fallback */
+/* tier-3 speculative binop: consult the tier-1 feedback; when the site saw
+ * a single consistent kind pair, emit an inline guarded fast path whose
+ * only fallback is deoptimization (the interpreter redoes the op). */
 static void fc_emit_binop(FlameCmp *c, uint32_t bc_off, int op)
 {
+    FlameEmitter *e = &c->e;
+    int fb, lhs, rhs;
+    int done;
+
+    if (c->tier != 3) {
+        fc_set_param(c, (uint32_t)op, bc_off);
+        fc_call(c, (void *)h_binop);
+        return;
+    }
+    fb = fc_feedback(c, bc_off);
+    if (fb < 0) {
+        fc_set_param(c, (uint32_t)op, bc_off);
+        fc_call(c, (void *)h_binop);
+        return;
+    }
+    lhs = fb & 0xF;
+    rhs = (fb >> 4) & 0xF;
+    done = fl_label(e);
+
+    if (lhs == FLAME_KIND_INT && rhs == FLAME_KIND_INT &&
+        (op == OP_add || op == OP_sub || op == OP_mul)) {
+        /* guard: both tags INT */
+        fl_mov_rm(e, FL_RTMP0, FL_RSP, -2 * FL_SZ_VALUE + FL_OFF_TAG);
+        fl_cmp_ri(e, FL_RTMP0, FL_TAG_INT);
+        fl_jcc(e, FL_NE, done); /* deopt */
+        fl_mov_rm(e, FL_RTMP0, FL_RSP, -FL_SZ_VALUE + FL_OFF_TAG);
+        fl_cmp_ri(e, FL_RTMP0, FL_TAG_INT);
+        fl_jcc(e, FL_NE, done);
+        fl_mov32_rm(e, FL_RTMP1, FL_RSP, -2 * FL_SZ_VALUE);
+        fl_mov32_rm(e, FL_RTMP2, FL_RSP, -FL_SZ_VALUE);
+        if (op == OP_add)
+            fl_add32_rr(e, FL_RTMP1, FL_RTMP2);
+        else if (op == OP_sub)
+            fl_sub32_rr(e, FL_RTMP1, FL_RTMP2);
+        else
+            fl_mul32_rr(e, FL_RTMP1, FL_RTMP2);
+        /* int32 overflow -> double semantics -> deopt */
+        fl_jcc(e, FL_VS, done);
+        if (op == OP_mul) {
+            /* -0 result: r == 0 with either operand negative -> deopt */
+            fl_cmp_ri(e, FL_RTMP1, 0);
+            fl_jcc(e, FL_EQ, done);
+        }
+        fl_mov32_mr(e, FL_RSP, -2 * FL_SZ_VALUE, FL_RTMP1);
+        fl_add_ri(e, FL_RSP, -FL_SZ_VALUE);
+        fl_jmp(e, done);
+        fl_bind(e, done);
+        fc_deopt(c, bc_off);
+        return;
+    }
+    if (lhs == FLAME_KIND_FLOAT && rhs == FLAME_KIND_FLOAT) {
+        /* guard: both tags FLOAT64 */
+        fl_mov_rm(e, FL_RTMP0, FL_RSP, -2 * FL_SZ_VALUE + FL_OFF_TAG);
+        fl_cmp_ri(e, FL_RTMP0, FL_TAG_FLOAT64);
+        fl_jcc(e, FL_NE, done);
+        fl_mov_rm(e, FL_RTMP0, FL_RSP, -FL_SZ_VALUE + FL_OFF_TAG);
+        fl_cmp_ri(e, FL_RTMP0, FL_TAG_FLOAT64);
+        fl_jcc(e, FL_NE, done);
+        fl_fload(e, 0, FL_RSP, -2 * FL_SZ_VALUE);
+        fl_fload(e, 1, FL_RSP, -FL_SZ_VALUE);
+        switch (op) {
+        case OP_add: fl_fadd(e, 0, 1); break;
+        case OP_sub: fl_fsub(e, 0, 1); break;
+        case OP_mul: fl_fmul(e, 0, 1); break;
+        case OP_div: fl_fdiv(e, 0, 1); break;
+        default:
+            fc_set_param(c, (uint32_t)op, bc_off);
+            fc_call(c, (void *)h_binop);
+            return;
+        }
+        fl_fstore(e, 0, FL_RSP, -2 * FL_SZ_VALUE);
+        fl_mov32_ri(e, FL_RTMP0, FL_TAG_FLOAT64);
+        fl_mov_mr(e, FL_RSP, -2 * FL_SZ_VALUE + FL_OFF_TAG, FL_RTMP0);
+        fl_add_ri(e, FL_RSP, -FL_SZ_VALUE);
+        fl_jmp(e, done);
+        fl_bind(e, done);
+        fc_deopt(c, bc_off);
+        return;
+    }
+    /* mixed / unknown feedback: baseline helper (always correct) */
     fc_set_param(c, (uint32_t)op, bc_off);
     fc_call(c, (void *)h_binop);
 }
@@ -780,19 +921,108 @@ static void fc_emit_binop(FlameCmp *c, uint32_t bc_off, int op)
 /* inline int-int comparison; fallback to js_relational_slow */
 static void fc_emit_relational(FlameCmp *c, uint32_t bc_off, int op)
 {
-    fc_set_param(c, (uint32_t)op, bc_off);
-    fc_call(c, (void *)h_relational);
+    FlameEmitter *e = &c->e;
+    int fb, lhs, rhs, done;
+    FlCond c1, c2;
+
+    if (c->tier != 3) {
+        fc_set_param(c, (uint32_t)op, bc_off);
+        fc_call(c, (void *)h_relational);
+        return;
+    }
+    fb = fc_feedback(c, bc_off);
+    lhs = fb >= 0 ? (fb & 0xF) : -1;
+    rhs = fb >= 0 ? ((fb >> 4) & 0xF) : -1;
+    if (lhs != FLAME_KIND_INT || rhs != FLAME_KIND_INT) {
+        fc_set_param(c, (uint32_t)op, bc_off);
+        fc_call(c, (void *)h_relational);
+        return;
+    }
+    switch (op) {
+    case OP_lt:  c1 = FL_LT; c2 = FL_NE; break;  /* <0 or >0 => not equal */
+    case OP_gt:  c1 = FL_GT; c2 = FL_NE; break;
+    default:
+        fc_set_param(c, (uint32_t)op, bc_off);
+        fc_call(c, (void *)h_relational);
+        return;
+    }
+    (void)c2;
+    done = fl_label(e);
+    fl_mov_rm(e, FL_RTMP0, FL_RSP, -2 * FL_SZ_VALUE + FL_OFF_TAG);
+    fl_cmp_ri(e, FL_RTMP0, FL_TAG_INT);
+    fl_jcc(e, FL_NE, done);
+    fl_mov_rm(e, FL_RTMP0, FL_RSP, -FL_SZ_VALUE + FL_OFF_TAG);
+    fl_cmp_ri(e, FL_RTMP0, FL_TAG_INT);
+    fl_jcc(e, FL_NE, done);
+    fl_mov32_rm(e, FL_RTMP1, FL_RSP, -2 * FL_SZ_VALUE);
+    fl_mov32_rm(e, FL_RTMP2, FL_RSP, -FL_SZ_VALUE);
+    fl_cv64_32(e, FL_RTMP1, FL_RTMP1);
+    fl_cv64_32(e, FL_RTMP2, FL_RTMP2);
+    fl_cmp_rr(e, FL_RTMP1, FL_RTMP2);
+    {
+        int lt = fl_label(e), ge = fl_label(e);
+        fl_jcc(e, c1, lt);
+        fl_jmp(e, ge);
+        fl_bind(e, lt);
+        fc_store_bool(c, FL_RSP, -2 * FL_SZ_VALUE, 1);
+        fl_jmp(e, done);
+        fl_bind(e, ge);
+        fc_store_bool(c, FL_RSP, -2 * FL_SZ_VALUE, 0);
+    }
+    fl_add_ri(e, FL_RSP, -FL_SZ_VALUE);
+    fl_jmp(e, done);
+    fl_bind(e, done);
+    fc_deopt(c, bc_off);
 }
 
-/* inline int-int equality; fallback to slow helpers */
-static void fc_emit_eq(FlameCmp *c, uint32_t bc_off, int op)
-{
-    int strict = (op == OP_strict_eq || op == OP_strict_neq);
-    fc_set_param(c, (uint32_t)op, bc_off);
-    fc_call(c, strict ? (void *)h_strict_eq : (void *)h_eq);
-}
 
 /* inline int-int bitwise logic / shifts; fallback to js_binary_logic_slow */
+static void fc_emit_eq(FlameCmp *c, uint32_t bc_off, int op)
+{
+    FlameEmitter *e = &c->e;
+    int fb, lhs, rhs, done, neg;
+    int strict = (op == OP_strict_eq || op == OP_strict_neq);
+
+    if (c->tier != 3 || strict) {
+        fc_set_param(c, (uint32_t)op, bc_off);
+        fc_call(c, strict ? (void *)h_strict_eq : (void *)h_eq);
+        return;
+    }
+    fb = fc_feedback(c, bc_off);
+    lhs = fb >= 0 ? (fb & 0xF) : -1;
+    rhs = fb >= 0 ? ((fb >> 4) & 0xF) : -1;
+    if (lhs != FLAME_KIND_INT || rhs != FLAME_KIND_INT) {
+        fc_set_param(c, (uint32_t)op, bc_off);
+        fc_call(c, (void *)h_eq);
+        return;
+    }
+    neg = (op == OP_neq);
+    done = fl_label(e);
+    fl_mov_rm(e, FL_RTMP0, FL_RSP, -2 * FL_SZ_VALUE + FL_OFF_TAG);
+    fl_cmp_ri(e, FL_RTMP0, FL_TAG_INT);
+    fl_jcc(e, FL_NE, done);
+    fl_mov_rm(e, FL_RTMP0, FL_RSP, -FL_SZ_VALUE + FL_OFF_TAG);
+    fl_cmp_ri(e, FL_RTMP0, FL_TAG_INT);
+    fl_jcc(e, FL_NE, done);
+    fl_mov32_rm(e, FL_RTMP1, FL_RSP, -2 * FL_SZ_VALUE);
+    fl_mov32_rm(e, FL_RTMP2, FL_RSP, -FL_SZ_VALUE);
+    fl_cmp_rr(e, FL_RTMP1, FL_RTMP2);
+    {
+        int t = fl_label(e), f = fl_label(e);
+        fl_jcc(e, neg ? FL_NE : FL_EQ, t);
+        fl_jmp(e, f);
+        fl_bind(e, t);
+        fc_store_bool(c, FL_RSP, -2 * FL_SZ_VALUE, 1);
+        fl_jmp(e, done);
+        fl_bind(e, f);
+        fc_store_bool(c, FL_RSP, -2 * FL_SZ_VALUE, 0);
+    }
+    fl_add_ri(e, FL_RSP, -FL_SZ_VALUE);
+    fl_jmp(e, done);
+    fl_bind(e, done);
+    fc_deopt(c, bc_off);
+}
+
 static void fc_emit_logic(FlameCmp *c, uint32_t bc_off, int op)
 {
     fc_set_param(c, (uint32_t)op, bc_off);
@@ -1440,8 +1670,47 @@ static void emit_one(FlameCmp *c, const uint8_t *pc, uint8_t op,
 /* Compilation driver                                                  */
 /* ------------------------------------------------------------------ */
 
+static int flame_compile_tier(JSContext *ctx, JSFunctionBytecode *b,
+                              uint8_t tier);
+
 int flame_baseline_compile(JSContext *ctx, JSFunctionBytecode *b)
 {
+    return flame_compile_tier(ctx, b, 2);
+}
+
+/* Tier-3 driver: optimizing compilation of an already-baseline-compiled
+ * function, specialized with the tier-1 feedback. */
+void flame_opt_compile(JSContext *ctx, JSFunctionBytecode *b)
+{
+    FlameProfile *prof = (FlameProfile *)b->flame_prof;
+    /* Tier 3 is experimental: the deopt-resume handoff still has a heap
+     * corruption issue on some workloads, so it is opt-in via env until
+     * root-caused. Everything else (baseline + OSR) is stable. */
+    {
+        const char *t3 = getenv("FLAME_TIER3");
+        if (!t3 || !*t3 || strcmp(t3, "0") == 0)
+            return;
+    }
+    if (!b->flame_compiled || b->flame_opt)
+        return;
+    if (!flame_rt_is_enabled(ctx->rt))
+        return;
+    if (prof && (prof->no_opt || prof->no_compile))
+        return;
+    if (osr_has_prop_store(b))
+        return; /* containment: same rule as baseline */
+    flame_log(FLAME_LOG_TIER, "tier3 compiling function");
+    flame_compile_tier(ctx, b, 3);
+}
+
+static int flame_compile_tier(JSContext *ctx, JSFunctionBytecode *b,
+                              uint8_t tier)
+{
+    {
+        const char *nc = getenv("FLAME_NO_COMPILE");
+        if (nc && *nc && strcmp(nc, "0") != 0)
+            return -1;
+    }
     FlameCmp c;
     FlameExecBlock *blk;
     FlameEmitter *e;
@@ -1463,6 +1732,8 @@ int flame_baseline_compile(JSContext *ctx, JSFunctionBytecode *b)
 
     memset(&c, 0, sizeof(c));
     c.b = b;
+    c.tier = tier;
+    c.prof = (FlameProfile *)b->flame_prof;
     c.labels = js_mallocz(ctx, sizeof(int32_t) * (size_t)(b->byte_code_len + 1));
     c.nat = js_mallocz(ctx, sizeof(size_t) * (size_t)(b->byte_code_len + 1));
     if (!c.labels || !c.nat)
@@ -1539,29 +1810,49 @@ int flame_baseline_compile(JSContext *ctx, JSFunctionBytecode *b)
     fl_pop(e, FL_RSP);
     fl_pop(e, FL_RSTATE);
     fl_ret(e);
-    if (!e->ok) { flame_log(FLAME_LOG_TIER, "epilogue emission failed"); goto fail; }
 
-    fl_finish(e);
-    if (!e->ok) {
-        int i, unb = 0;
-        for (i = 0; i < e->label_count; i++)
-            if (!e->labels[i].bound) unb++;
-        flame_log(FLAME_LOG_TIER,
-                  "fl_finish failed: labels=%d unbound=%d patches=%d",
-                  e->label_count, unb, e->patch_count);
-        {
-            int i;
-            for (i = 0; i < e->label_count; i++)
-                if (!e->labels[i].bound)
-                    flame_log(FLAME_LOG_TIER,
-                              "  unbound label id=%d created@native:%u",
-                              i, (uint32_t)e->labels[i].target);
+    /* ---- OSR entry stubs (one per loop header) ----
+     * C-callable: int stub(FlameJitState *st) — loads the live frame
+     * pointers from the state, pushes the callee-saved regs the epilogue
+     * expects, and jumps into the loop header code. */
+    {
+        uint32_t osr_bc[FL_MAX_OSR_HEADERS];
+        void *osr_entry[FL_MAX_OSR_HEADERS];
+        int n = c.osr_count, k;
+        for (k = 0; k < n; k++) {
+            int lbl = fl_label(e);
+            size_t stub_at = e->len;
+            fl_mov_rr(e, FL_RSTATE, FL_RARG);
+            fl_mov_rm(e, FL_RLOC, FL_RSTATE, FL_OFF_LOCAL_BUF);
+            fl_mov_rm(e, FL_RSP, FL_RSTATE, FL_OFF_SP);
+            /* match the main prologue: the epilogue pops these */
+            fl_push(e, FL_RSTATE);
+            fl_push(e, FL_RSP);
+            fl_push(e, FL_RLOC);
+            fl_jmp(e, lbl);
+            fl_bind_offset(e, lbl, c.nat[c.osr_bc[k]]);
+            osr_bc[k] = c.osr_bc[k];
+            osr_entry[k] = blk->base + stub_at;
         }
-        goto fail;
+        /* registered after fl_finish (patches must be resolved first) */
+        fl_finish(e);
+        if (!e->ok) {
+            int i, unb = 0;
+            for (i = 0; i < e->label_count; i++)
+                if (!e->labels[i].bound) unb++;
+            flame_log(FLAME_LOG_TIER,
+                      "fl_finish failed: labels=%d unbound=%d patches=%d",
+                      e->label_count, unb, e->patch_count);
+            goto fail;
+        }
+        flame_rt_register_func(ctx->rt, b, blk->base, e->len, 2,
+                               osr_bc, osr_entry, n, &b->flame_compiled);
     }
 
     js_free(ctx, c.labels);
     js_free(ctx, c.nat);
+    c.labels = NULL;
+    c.nat = NULL;
     {
         const char *dump = getenv("FLAME_DUMP");
         if (dump) {
@@ -1582,7 +1873,6 @@ int flame_baseline_compile(JSContext *ctx, JSFunctionBytecode *b)
             }
         }
     }
-    flame_rt_register_func(ctx->rt, b, blk->base, e->len, 2);
     flame_exec_flush_icache(blk->base, e->len);
 
     if (JS_AtomIsString(ctx, b->func_name)) {
@@ -1590,8 +1880,9 @@ int flame_baseline_compile(JSContext *ctx, JSFunctionBytecode *b)
         if (s) { lbl = js_strdup(ctx, s); JS_FreeCString(ctx, s); }
     }
     flame_log(FLAME_LOG_TIER,
-              "baseline compiled: %s (%d bc bytes -> %zu native bytes)",
-              lbl ? lbl : "<anon>", b->byte_code_len, e->len);
+              "baseline compiled: %s (%d bc bytes -> %zu native bytes, "
+              "%d osr entries)",
+              lbl ? lbl : "<anon>", b->byte_code_len, e->len, c.osr_count);
     js_free(ctx, lbl);
     return 0;
 
@@ -1600,6 +1891,8 @@ fail:
               c.e.ok, (uint32_t)(pc - b->byte_code_buf));
     js_free(ctx, c.labels);
     js_free(ctx, c.nat);
+    c.labels = NULL;
+    c.nat = NULL;
     /* fall through */
 refuse:
     flame_stat_compile_fails++;
@@ -1626,6 +1919,7 @@ refuse_quiet:
 /* Entry from the interpreter                                          */
 /* ------------------------------------------------------------------ */
 
+
 /* True if this call should run in the baseline JIT. */
 int flame_should_enter_jit(JSContext *ctx, JSObject *p,
                            JSFunctionBytecode *b, int flags)
@@ -1636,8 +1930,14 @@ int flame_should_enter_jit(JSContext *ctx, JSObject *p,
         return 0;
     if (b->func_kind != JS_FUNC_NORMAL)
         return 0;
-    return b->flame_compiled != NULL;
+    if (osr_has_prop_store(b))
+        return 0; /* containment: see flame_baseline_maybe_compile */
+    return (b->flame_opt ? b->flame_opt : b->flame_compiled) != NULL;
 }
+
+static JSValue flame_deopt_resume(JSContext *caller_ctx,
+                                  JSValueConst func_obj,
+                                  FlameJitState *st, JSFunctionBytecode *b);
 
 JSValue flame_baseline_call(JSContext *caller_ctx, JSValueConst func_obj,
                             JSValueConst this_obj, int argc, JSValue *argv)
@@ -1645,7 +1945,9 @@ JSValue flame_baseline_call(JSContext *caller_ctx, JSValueConst func_obj,
     JSRuntime *rt = caller_ctx->rt;
     JSObject *p = JS_VALUE_GET_OBJ(func_obj);
     JSFunctionBytecode *b = p->u.func.function_bytecode;
-    FlameCompiledFunc *cf = (FlameCompiledFunc *)b->flame_compiled;
+    FlameCompiledFunc *cf = (FlameCompiledFunc *)(b->flame_opt ?
+                                                  b->flame_opt :
+                                                  b->flame_compiled);
     typedef int (*FlameEntry)(FlameJitState *);
     FlameEntry fn = (FlameEntry)cf->code;
     FlameJitState *st;
@@ -1683,6 +1985,7 @@ JSValue flame_baseline_call(JSContext *caller_ctx, JSValueConst func_obj,
     }
 
     st->ctx = ctx;
+    st->sfp = &st->sf;
     st->b = b;
     st->bc_buf = b->byte_code_buf;
     st->var_refs = p->u.func.var_refs;
@@ -1702,7 +2005,35 @@ JSValue flame_baseline_call(JSContext *caller_ctx, JSValueConst func_obj,
     rt->current_stack_frame = &st->sf;
 
     flame_stat_jit_calls++;
+    /* tiering continues while the function runs JIT: the interpreter's
+     * entry hook is bypassed once compiled, so count entries here */
+    {
+        FlameProfile *prof = (FlameProfile *)b->flame_prof;
+        if (prof && !prof->no_opt) {
+            prof->entries++;
+            if (prof->entries >= FLAME_OPT_FUNC_THRESHOLD &&
+                (prof->entries - FLAME_OPT_FUNC_THRESHOLD) % 10000 == 0)
+                flame_opt_maybe_compile(ctx, b);
+        }
+    }
     fn(st);
+
+    if (st->exit_kind == FLAME_EXIT_DEOPT) {
+        /* guard failure: the frame transfers to the interpreter; the resume
+         * path owns local_buf, this_val and the frame's var_ref_list */
+        FlameProfile *prof = (FlameProfile *)b->flame_prof;
+        rt->current_stack_frame = st->sf.prev_frame;
+        if (prof) {
+            prof->opt_deopts++;
+            if (prof->opt_deopts >= FLAME_OPT_DEOPT_LIMIT) {
+                prof->no_opt = 1;
+                b->flame_opt = NULL; /* permanent revert to baseline */
+                flame_log(FLAME_LOG_TIER,
+                          "deopt limit reached: reverting to baseline");
+            }
+        }
+        return flame_deopt_resume(caller_ctx, func_obj, st, b);
+    }
 
     rt->current_stack_frame = st->sf.prev_frame;
     if (!list_empty(&st->sf.var_ref_list))
@@ -1720,6 +2051,196 @@ JSValue flame_baseline_call(JSContext *caller_ctx, JSValueConst func_obj,
     return st->retval;
 }
 
+/* ------------------------------------------------------------------ */
+/* Deoptimization (tier 3 guard failures)                              */
+/* ------------------------------------------------------------------ */
+
+/* Materialize the deopted JIT frame as a suspended interpreter frame and
+ * resume at the failed opcode. All frame values transfer by ownership:
+ * the wrapper skips its normal free path for a deopt exit. */
+static JSValue flame_deopt_resume(JSContext *caller_ctx,
+                                  JSValueConst func_obj,
+                                  FlameJitState *st, JSFunctionBytecode *b)
+{
+    JSRuntime *rt = caller_ctx->rt;
+    JSContext *ctx = b->realm;
+    JSAsyncFunctionState *s;
+    JSStackFrame *sf;
+    JSValue ret, *pv, *q;
+    int i, n, arg_buf_len, local_count;
+
+    s = js_mallocz(ctx, sizeof(*s));
+    if (!s)
+        return JS_EXCEPTION;
+    s->header.ref_count = 1;
+    add_gc_object(rt, &s->header, JS_GC_OBJ_TYPE_ASYNC_FUNCTION);
+    sf = &s->frame;
+    init_list_head(&sf->var_ref_list);
+    sf->js_mode = b->js_mode;
+    sf->cur_pc = b->byte_code_buf + st->deopt_pc;
+
+    arg_buf_len = b->arg_count;
+    local_count = arg_buf_len + b->var_count + b->stack_size;
+    sf->arg_buf = js_malloc(ctx, sizeof(JSValue) *
+                            (size_t)max_int(local_count, 1));
+    if (!sf->arg_buf) {
+        remove_gc_object(&s->header);
+        js_free_rt(rt, s);
+        return JS_EXCEPTION;
+    }
+    sf->cur_func = JS_DupValue(ctx, func_obj);
+    s->this_val = st->this_val; /* ownership transferred from the JIT frame */
+    s->argc = arg_buf_len;
+    sf->arg_count = arg_buf_len;
+    sf->var_buf = sf->arg_buf + arg_buf_len;
+    sf->cur_sp = sf->var_buf + b->var_count;
+
+    /* move args/vars/stack values from the JIT frame */
+    for (i = 0; i < arg_buf_len + b->var_count; i++)
+        sf->arg_buf[i] = st->local_buf[i];
+    n = (int)(st->sp - st->stack_base);
+    for (i = 0, pv = st->stack_base, q = sf->cur_sp; i < n; i++, pv++, q++)
+        *q = *pv;
+    s->throw_flag = st->exception;
+    s->resolving_funcs[0] = JS_UNDEFINED;
+    s->resolving_funcs[1] = JS_UNDEFINED;
+
+    /* relocate any var_refs linked to the JIT frame's list head */
+    if (!list_empty(&st->sf.var_ref_list)) {
+        struct list_head *first = st->sf.var_ref_list.next;
+        struct list_head *last = st->sf.var_ref_list.prev;
+        first->prev = &sf->var_ref_list;
+        last->next = &sf->var_ref_list;
+        sf->var_ref_list.next = first;
+        sf->var_ref_list.prev = last;
+    }
+
+    js_free(ctx, st->local_buf); /* raw: values moved to the resume frame */
+
+    if (js_check_stack_overflow(rt, 0)) {
+        JS_FreeValueRT(rt, sf->cur_func);
+        JS_FreeValueRT(rt, s->this_val);
+        js_free_rt(rt, sf->arg_buf);
+        remove_gc_object(&s->header);
+        js_free_rt(rt, s);
+        return JS_ThrowStackOverflow(caller_ctx);
+    }
+
+    /* resume exactly like a suspended generator: the interpreter picks up
+     * at sf->cur_pc with sf->cur_sp */
+    ret = JS_CallInternal(ctx, JS_MKPTR(JS_TAG_INT, s), s->this_val,
+                          JS_UNDEFINED, s->argc, sf->arg_buf,
+                          JS_CALL_FLAG_GENERATOR);
+
+    /* normal functions always complete: the resumed interpreter freed the
+     * frame VALUES (done label); release the frame arrays + borrowed refs */
+    js_free_rt(rt, sf->arg_buf);
+    JS_FreeValueRT(rt, sf->cur_func);
+    JS_FreeValueRT(rt, s->this_val);
+    remove_gc_object(&s->header);
+    js_free_rt(rt, s);
+    return ret;
+}
+
+/* ------------------------------------------------------------------ */
+/* On-Stack Replacement (OSR)                                          */
+/* ------------------------------------------------------------------ */
+
+/* Transfer the CURRENT interpreter activation into compiled code at a hot
+ * loop header. The JIT frame aliases the interpreter's live frame (st->sfp
+ * points at it), so args/vars stay in place; the loop continues natively
+ * and the function runs to completion in compiled code. */
+/* OSR currently skips functions with property-store ops: the store's
+ * setter chain can re-enter the runtime while the aliased live frame is
+ * active, which surfaced teardown refcount issues on DOM-heavy pages.
+ * Entry-time JIT (flame_baseline_call) is unaffected. */
+static int osr_has_prop_store_impl(JSFunctionBytecode *b)
+{
+    const uint8_t *pc = b->byte_code_buf;
+    const uint8_t *end = pc + b->byte_code_len;
+    while (pc < end) {
+        uint8_t op = *pc++;
+        switch (op) {
+        case OP_put_field: case OP_put_array_el: case OP_put_var:
+        case OP_put_var_init: case OP_put_var_strict:
+            return 1;
+        }
+        pc += short_opcode_info(op).size - 1;
+    }
+    return 0;
+}
+
+static int osr_has_prop_store(JSFunctionBytecode *b)
+{
+    return osr_has_prop_store_impl(b);
+}
+
+int flame_osr_run(JSContext *ctx, JSFunctionBytecode *b, FlameOsrEntry *oe,
+                  JSValue *sp, JSValue *out)
+{
+    if (osr_has_prop_store(b))
+        return 0;
+    JSRuntime *rt = ctx->rt;
+    JSStackFrame *sf = rt->current_stack_frame;
+    JSObject *p;
+    typedef int (*FlameEntry)(FlameJitState *);
+    FlameJitState *st;
+    JSValue *sp_start;
+    JSValue *jit_base;
+
+    if (!sf || sf->cur_pc == NULL)
+        return 0;
+    /* the JIT frame layout requires vars at (arg_count + idx) slots from
+     * the JIT base: use the frame's arg_buf for copied-arg frames, or
+     * var_buf directly for parameterless functions (top-level scripts) */
+    if (b->arg_count == 0)
+        jit_base = sf->var_buf;
+    else if (sf->var_buf == sf->arg_buf + b->arg_count)
+        jit_base = sf->arg_buf;
+    else
+        return 0; /* in-place argv with parameters: skip OSR */
+    p = JS_VALUE_GET_OBJ(sf->cur_func);
+    if (p->u.func.function_bytecode != b)
+        return 0;
+
+    st = (FlameJitState *)alloca(sizeof(FlameJitState));
+    memset(st, 0, sizeof(*st));
+    st->sfp = sf; /* alias the live interpreter frame */
+    st->ctx = ctx;
+    st->b = b;
+    st->bc_buf = b->byte_code_buf;
+    st->var_refs = p->u.func.var_refs;
+    st->cpool = b->cpool;
+    st->local_buf = jit_base;
+    st->stack_base = sf->var_buf + b->var_count;
+    st->sp = sp;
+    st->argc = sf->arg_count;
+    /* this_val is only consumed by push_this, which only appears at
+     * function entry — unreachable after OSR */
+    st->this_val = JS_UNDEFINED;
+
+    if (sp < st->stack_base || sp > st->stack_base + b->stack_size) {
+        flame_log(FLAME_LOG_TIER, "osr bail: sp out of range");
+        return 0;
+    }
+
+    flame_stat_osr++;
+    sp_start = sp;
+    ((FlameEntry)oe->entry)(st);
+
+    if (st->exception) {
+        /* free only what the JIT pushed beyond the OSR start; the
+         * interpreter's own exception unwind handles the rest */
+        JSValue *pv;
+        for (pv = sp_start; pv < st->sp; pv++)
+            JS_FreeValue(ctx, *pv);
+        *out = JS_EXCEPTION;
+        return 1;
+    }
+    *out = st->retval;
+    return 1;
+}
+
 /* Tiering trigger: called from flame_hook_function_entry when the
  * function is hot enough to deserve native code. */
 void flame_baseline_maybe_compile(JSContext *ctx, JSFunctionBytecode *b)
@@ -1731,5 +2252,19 @@ void flame_baseline_maybe_compile(JSContext *ctx, JSFunctionBytecode *b)
         return;
     if (prof && prof->no_compile)
         return;
+    /* conservative containment: property-store functions stay interpreted
+     * until the exotic-setter teardown interaction is root-caused */
+    if (osr_has_prop_store(b)) {
+        if (prof)
+            prof->no_compile = 1;
+        return;
+    }
     flame_baseline_compile(ctx, b);
+}
+
+/* Tier-3 trigger: optimizing compilation of an already-baseline-compiled
+ * function. Failures are silent; the baseline code remains active. */
+void flame_opt_maybe_compile(JSContext *ctx, JSFunctionBytecode *b)
+{
+    flame_opt_compile(ctx, b);
 }

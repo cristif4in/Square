@@ -94,6 +94,8 @@ void fl_or32_rr(FlameEmitter *e, FlReg dst, FlReg src);
 void fl_xor32_rr(FlameEmitter *e, FlReg dst, FlReg src);
 void fl_sar32_cl(FlameEmitter *e, FlReg dst);            /* shift by cl */
 void fl_shl32_cl(FlameEmitter *e, FlReg dst);
+void fl_shl32_ri(FlameEmitter *e, FlReg dst, int imm);
+void fl_dec_mem32(FlameEmitter *e, FlReg ptr); /* dec dword [ptr] */
 void fl_shr32_cl(FlameEmitter *e, FlReg dst);
 void fl_cmp_rr(FlameEmitter *e, FlReg a, FlReg b);
 void fl_cmp_ri(FlameEmitter *e, FlReg a, int32_t imm);

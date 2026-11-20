@@ -61,6 +61,15 @@ int flame_ic_get_field(JSContext *ctx, JSFunctionBytecode *b,
     JSObject *p;
     JSShapeProperty *prs;
 
+    {
+        static int noic = -1;
+        if (noic < 0) {
+            const char *e = getenv("FLAME_NO_IC");
+            noic = (e && *e && strcmp(e, "0") != 0);
+        }
+        if (noic)
+            return 0;
+    }
     if (!prof || !flame_is_enabled(NULL))
         return 0;
     if (JS_VALUE_GET_TAG(obj) != JS_TAG_OBJECT)

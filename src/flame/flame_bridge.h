@@ -32,7 +32,8 @@ void flame_global_init(void);
 void flame_hook_function_entry(struct JSContext *ctx,
                                struct JSObject *func_obj,
                                struct JSFunctionBytecode *b);
-void flame_hook_loop_backedge(struct JSFunctionBytecode *b, uint32_t pc_off);
+int flame_hook_loop_backedge(struct JSFunctionBytecode *b, uint32_t pc_off,
+                             JSValue *sp, JSValue *out);
 void flame_hook_call_site(struct JSFunctionBytecode *b, uint32_t pc_off,
                           int argc, const JSValue *argv);
 void flame_hook_binop(struct JSFunctionBytecode *b, uint32_t pc_off,

@@ -359,6 +359,23 @@ void fl_and32_rr(FlameEmitter *e, FlReg dst, FlReg src) { fl_logic32(e, dst, src
 void fl_or32_rr(FlameEmitter *e, FlReg dst, FlReg src)  { fl_logic32(e, dst, src, 0x09); }
 void fl_xor32_rr(FlameEmitter *e, FlReg dst, FlReg src) { fl_logic32(e, dst, src, 0x31); }
 
+void fl_shl32_ri(FlameEmitter *e, FlReg dst, int imm)
+{
+    int r = fl_reg_x64[dst];
+    if (r >= 8) fl_emit8(e, 0x41);
+    fl_emit8(e, 0xC1);
+    fl_emit8(e, (uint8_t)(0xE0 | (r & 7)));  /* shl r32, imm8 */
+    fl_emit8(e, (uint8_t)imm);
+}
+
+void fl_dec_mem32(FlameEmitter *e, FlReg ptr)
+{
+    int r = fl_reg_x64[ptr];
+    if (r >= 8) fl_emit8(e, 0x41);
+    fl_emit8(e, 0xFF);
+    fl_emit8(e, (uint8_t)(0x08 | (r & 7)));  /* dec dword [ptr] (FF /1) */
+}
+
 void fl_sar32_cl(FlameEmitter *e, FlReg dst)
 {
     int r = fl_reg_x64[dst];

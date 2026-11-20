@@ -55,6 +55,11 @@ void flame_log(int level, const char *fmt, ...) __attribute__((format(printf,2,3
 #define FLAME_HOT_LOOP_THRESHOLD  200
 /* Profiled function entries before optimizing compilation (tier 1 -> 3). */
 #define FLAME_HOT_FUNC_THRESHOLD  2000
+/* Tier-3 (optimizing) triggers: entries / loop backedges. Deopting more
+ * than FLAME_OPT_DEOPT_LIMIT times permanently reverts to tier 2. */
+#define FLAME_OPT_FUNC_THRESHOLD  5000
+#define FLAME_OPT_LOOP_THRESHOLD  50000
+#define FLAME_OPT_DEOPT_LIMIT     3
 
 /* ------------------------------------------------------------------ */
 /* Value-kind feedback encoding                                        */
@@ -98,6 +103,8 @@ typedef struct FlameProfile {
     struct FlameICSite *ics; /* inline-cache sites (phase 3) */
     int ic_count, ic_cap;
     uint8_t no_compile;      /* baseline tier refused this function */
+    uint8_t no_opt;          /* optimizing tier gave up (deopt limit hit) */
+    uint32_t opt_deopts;     /* guard failures recorded so far */
 } FlameProfile;
 
 /* Inline-cache site record. Cached own-property reads are self-validating:
@@ -167,10 +174,21 @@ typedef struct FlameCompiledFunc {
     struct JSFunctionBytecode *b; /* backlink (not owned) */
     uint8_t *code;                /* inside an exec block */
     size_t code_size;
-    void *osr_map;                /* loop-header -> native offset map */
+    struct {                      /* OSR entry stub per loop header */
+        uint32_t bc_off;
+        void *entry;              /* int (*)(FlameJitState*) */
+    } osr[8];
     int osr_count;
     uint8_t tier;                 /* 2 = baseline, 3 = optimizing */
 } FlameCompiledFunc;
+
+/* Optimizing-tier entry stored alongside the baseline one. */
+#define FLAME_EXIT_DEOPT 3      /* FlameJitState.exit_kind: guard failure */
+
+typedef struct FlameOsrEntry {
+    uint32_t bc_off;
+    void *entry;
+} FlameOsrEntry;
 
 /* Executable memory (VirtualAlloc / mmap). */
 void *flame_exec_alloc(size_t size);
@@ -194,7 +212,9 @@ typedef struct FlameCallSite FlameCallSite;
 typedef struct FlameLoop FlameLoop;
 struct FlameExecBlock *flame_rt_new_block(struct JSRuntime *rt, size_t size);
 void flame_rt_register_func(struct JSRuntime *rt, struct JSFunctionBytecode *b,
-                            void *code, size_t code_size, uint8_t tier);
+                            void *code, size_t code_size, uint8_t tier,
+                            const uint32_t *osr_bc, void **osr_entry,
+                            int osr_count, void **slot);
 void flame_set_stats_rt(struct JSRuntime *rt);
 
 /* Baseline tier (flame_baseline.c). */
@@ -205,6 +225,8 @@ JSValue flame_baseline_call(struct JSContext *caller_ctx,
                             int argc, JSValue *argv);
 void flame_baseline_maybe_compile(struct JSContext *ctx,
                                   struct JSFunctionBytecode *b);
+void flame_opt_maybe_compile(struct JSContext *ctx,
+                             struct JSFunctionBytecode *b);
 
 /* ------------------------------------------------------------------ */
 /* Hook entry points (called from quickjs.c, defined in Flame sources) */
@@ -225,7 +247,8 @@ void flame_hook_function_entry(struct JSContext *ctx,
                                struct JSFunctionBytecode *b);
 
 /* Backward jump (loop backedge) at bytecode offset pc_off. */
-void flame_hook_loop_backedge(struct JSFunctionBytecode *b, uint32_t pc_off);
+int flame_hook_loop_backedge(struct JSFunctionBytecode *b, uint32_t pc_off,
+                             JSValue *sp, JSValue *out);
 
 /* Call site: records call frequency + argument kind feedback. */
 void flame_hook_call_site(struct JSFunctionBytecode *b, uint32_t pc_off,

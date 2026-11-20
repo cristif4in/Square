@@ -15,6 +15,17 @@
  */
 #include "flame_internal.h"
 
+/* FLAME_NO_HOOKS=1 disables all tier-1 instrumentation (diagnostics) */
+static int flame_no_hooks_env(void)
+{
+    static int noh = -1;
+    if (noh < 0) {
+        const char *e = getenv("FLAME_NO_HOOKS");
+        noh = (e && *e && strcmp(e, "0") != 0);
+    }
+    return noh;
+}
+
 /* ------------------------------------------------------------------ */
 /* Kind classification                                                 */
 /* ------------------------------------------------------------------ */
@@ -184,7 +195,7 @@ void flame_hook_function_entry(JSContext *ctx, JSObject *p,
 {
     FlameProfile *prof;
 
-    if (!flame_is_enabled(NULL))
+    if (!flame_is_enabled(NULL) || flame_no_hooks_env())
         return;
     b->flame_exec_count++;
     prof = (FlameProfile *)b->flame_prof;
@@ -197,30 +208,51 @@ void flame_hook_function_entry(JSContext *ctx, JSObject *p,
     /* Tier 1 -> 2: enough entries to justify native code. */
     if (prof->entries == FLAME_HOT_FUNC_THRESHOLD)
         flame_baseline_maybe_compile(ctx, b);
+    /* Tier 1 -> 3: optimizing compilation from accumulated feedback. */
+    if (prof->entries >= FLAME_OPT_FUNC_THRESHOLD &&
+        (prof->entries - FLAME_OPT_FUNC_THRESHOLD) % 10000 == 0)
+        flame_opt_maybe_compile(ctx, b);
 }
 
-void flame_hook_loop_backedge(JSFunctionBytecode *b, uint32_t pc_off)
+int flame_hook_loop_backedge(JSFunctionBytecode *b, uint32_t pc_off,
+                             JSValue *sp, JSValue *out)
 {
     FlameProfile *prof = (FlameProfile *)b->flame_prof;
     JSContext *ctx = b->realm;
     FlameLoop *loop;
-    if (!flame_is_enabled(NULL))
-        return;
+    FlameCompiledFunc *cf;
+    int i;
+
+    if (!flame_is_enabled(NULL) || flame_no_hooks_env())
+        return 0;
     /* A hot loop qualifies the function for profiling even if it is only
      * ever entered once (top-level scripts, one-shot callbacks). */
     if (!prof)
         prof = flame_attach_profile(ctx, b);
     if (!prof)
-        return;
+        return 0;
     loop = flame_find_loop(ctx, prof, pc_off);
     if (!loop)
-        return;
+        return 0;
     loop->count++;
     if (loop->count == FLAME_HOT_LOOP_THRESHOLD) {
         flame_log(FLAME_LOG_TIER, "hot loop @ bc:%u (baseline candidate)",
                   pc_off);
         flame_baseline_maybe_compile(ctx, b);
     }
+    if (loop->count == FLAME_OPT_LOOP_THRESHOLD)
+        flame_opt_maybe_compile(ctx, b);
+    /* OSR: transfer this interpreted activation into compiled code at the
+     * loop header, once per threshold crossing */
+    if ((loop->count % FLAME_HOT_LOOP_THRESHOLD) != 0)
+        return 0;
+    cf = (FlameCompiledFunc *)b->flame_compiled;
+    if (!cf || cf->tier != 2)
+        return 0;
+    for (i = 0; i < cf->osr_count; i++)
+        if (cf->osr[i].bc_off == pc_off)
+            return flame_osr_run(ctx, b, &cf->osr[i], sp, out);
+    return 0;
 }
 
 void flame_hook_call_site(JSFunctionBytecode *b, uint32_t pc_off,
@@ -229,6 +261,15 @@ void flame_hook_call_site(JSFunctionBytecode *b, uint32_t pc_off,
     FlameProfile *prof = (FlameProfile *)b->flame_prof;
     JSContext *ctx = b->realm;
     FlameCallSite *site;
+    {
+        static int noh = -1;
+        if (noh < 0) {
+            const char *e = getenv("FLAME_NO_HOOKS");
+            noh = (e && *e && strcmp(e, "0") != 0);
+        }
+        if (noh)
+            return;
+    }
     if (!prof || !flame_is_enabled(NULL))
         return;
     site = flame_find_call(ctx, prof, pc_off);
@@ -245,7 +286,7 @@ void flame_hook_binop(JSFunctionBytecode *b, uint32_t pc_off,
 {
     FlameProfile *prof = (FlameProfile *)b->flame_prof;
     uint8_t *fb;
-    if (!prof || !flame_is_enabled(NULL))
+    if (!prof || !flame_is_enabled(NULL) || flame_no_hooks_env())
         return;
     if (!prof->binop_fb || pc_off >= (uint32_t)prof->binop_fb_len)
         return;
