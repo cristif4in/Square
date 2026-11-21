@@ -1,11 +1,4 @@
-/*
- * Flame — internal shared declarations.
- *
- * This header is only included by Flame's own sources, which are compiled
- * inside the QuickJS translation unit (quickjs.c includes flame_all.h at the
- * bottom), so full access to QuickJS internals is available and struct
- * layouts are guaranteed to match exactly.
- */
+/* Flame internal declarations. Compiled inside the QuickJS translation unit. */
 #ifndef SQUARE_FLAME_INTERNAL_H
 #define SQUARE_FLAME_INTERNAL_H
 
@@ -24,9 +17,6 @@ struct JSFunctionBytecode;
 struct JSShape;
 struct FlameProfile;
 
-/* ------------------------------------------------------------------ */
-/* Debug logging                                                       */
-/* ------------------------------------------------------------------ */
 
 /* FLAME_DEBUG environment variable, parsed once on first use:
  *   0                : quiet (default)
@@ -45,9 +35,6 @@ int flame_debug_init(void);   /* parses FLAME_DEBUG once, returns level */
 void flame_dump_stats_atexit(void);
 void flame_log(int level, const char *fmt, ...) __attribute__((format(printf,2,3)));
 
-/* ------------------------------------------------------------------ */
-/* Tiering thresholds                                                  */
-/* ------------------------------------------------------------------ */
 
 /* Interpreter entries before profiling kicks in (tier 0 -> 1). */
 #define FLAME_HOT_ENTRY_THRESHOLD 100
@@ -61,9 +48,6 @@ void flame_log(int level, const char *fmt, ...) __attribute__((format(printf,2,3
 #define FLAME_OPT_LOOP_THRESHOLD  50000
 #define FLAME_OPT_DEOPT_LIMIT     3
 
-/* ------------------------------------------------------------------ */
-/* Value-kind feedback encoding                                        */
-/* ------------------------------------------------------------------ */
 
 typedef enum FlameKind {
     FLAME_KIND_NONE    = 0,
@@ -158,9 +142,6 @@ void flame_ic_free_profile(struct JSRuntime *rt, struct FlameProfile *prof);
 /* Global IC counters (flame_ic.c). */
 extern uint64_t flame_stat_ic_hits, flame_stat_ic_misses;
 
-/* ------------------------------------------------------------------ */
-/* Runtime state + executable memory (flame_rt.c)                      */
-/* ------------------------------------------------------------------ */
 
 /* Global JIT statistics. */
 extern uint64_t flame_stat_compiles, flame_stat_compile_fails;
@@ -228,9 +209,6 @@ void flame_baseline_maybe_compile(struct JSContext *ctx,
 void flame_opt_maybe_compile(struct JSContext *ctx,
                              struct JSFunctionBytecode *b);
 
-/* ------------------------------------------------------------------ */
-/* Hook entry points (called from quickjs.c, defined in Flame sources) */
-/* ------------------------------------------------------------------ */
 
 struct JSRuntime;
 struct JSContext;

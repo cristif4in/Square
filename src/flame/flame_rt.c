@@ -16,9 +16,6 @@
 #include <unistd.h>
 #endif
 
-/* ------------------------------------------------------------------ */
-/* Global stats                                                        */
-/* ------------------------------------------------------------------ */
 
 uint64_t flame_stat_compiles;       /* successful JIT compilations */
 uint64_t flame_stat_compile_fails;  /* unsupported bytecode / OOM */
@@ -27,9 +24,6 @@ uint64_t flame_stat_deopts;         /* guard failures -> interpreter */
 uint64_t flame_stat_osr;            /* on-stack replacement entries */
 uint64_t flame_stat_native_bytes;   /* emitted machine code bytes */
 
-/* ------------------------------------------------------------------ */
-/* Executable memory                                                   */
-/* ------------------------------------------------------------------ */
 
 void *flame_exec_alloc(size_t size)
 {
@@ -64,13 +58,7 @@ void flame_exec_flush_icache(void *ptr, size_t size)
 #endif
 }
 
-/* ------------------------------------------------------------------ */
-/* Compiled-function record                                            */
-/* ------------------------------------------------------------------ */
 
-/* ------------------------------------------------------------------ */
-/* Per-runtime state                                                   */
-/* ------------------------------------------------------------------ */
 
 /* Process-wide kill-switch (SQRL_NO_JIT / flame_set_global_enabled). */
 static int flame_global_enabled = 1;
@@ -132,9 +120,6 @@ void flame_rt_dispose(JSRuntime *rt)
     rt->flame_rt = NULL;
 }
 
-/* ------------------------------------------------------------------ */
-/* Enable/disable plumbing                                             */
-/* ------------------------------------------------------------------ */
 
 int flame_rt_is_enabled(JSRuntime *rt)
 {
@@ -165,9 +150,6 @@ int flame_is_enabled(JSRuntime *rt)
     return flame_rt_is_enabled(rt);
 }
 
-/* ------------------------------------------------------------------ */
-/* Code cache management                                               */
-/* ------------------------------------------------------------------ */
 
 FlameExecBlock *flame_rt_new_block(JSRuntime *rt, size_t size)
 {
@@ -228,9 +210,6 @@ void flame_rt_register_func(JSRuntime *rt, JSFunctionBytecode *b,
     flame_stat_native_bytes += code_size;
 }
 
-/* ------------------------------------------------------------------ */
-/* Stats                                                               */
-/* ------------------------------------------------------------------ */
 
 void flame_dump_stats(JSRuntime *rt)
 {

@@ -48,9 +48,6 @@ static void ic_invalidate(JSRuntime *rt, FlameICSite *site)
     site->cached = 0;
 }
 
-/* ------------------------------------------------------------------ */
-/* Field IC (OP_get_field)                                             */
-/* ------------------------------------------------------------------ */
 
 int flame_ic_get_field(JSContext *ctx, JSFunctionBytecode *b,
                        uint32_t pc_off, JSValueConst obj, JSAtom atom,
@@ -134,9 +131,6 @@ void flame_ic_record_field(JSContext *ctx, JSFunctionBytecode *b,
     (void)result;
 }
 
-/* ------------------------------------------------------------------ */
-/* Element IC (OP_get_array_el)                                        */
-/* ------------------------------------------------------------------ */
 
 /* Fast dense read, mirroring JS_GetPropertyValue's own fast path exactly.
  * Returns 1 + fills *out when eligible. */

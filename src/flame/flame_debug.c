@@ -74,7 +74,6 @@ void flame_global_init(void)
     }
 }
 
-/* ------------------------------------------------------------------ */
 /* Stats teardown hook (impl in flame_rt.c owns counters). */
 void flame_set_stats_rt(JSRuntime *rt)
 {

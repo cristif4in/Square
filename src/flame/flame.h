@@ -1,15 +1,4 @@
-/*
- * Flame — the Square JIT engine for QuickJS.
- *
- * Public API. Flame tiers QuickJS bytecode:
- *   tier 0: profiling interpreter (QuickJS, unmodified semantics)
- *   tier 1: profiled interpreter  (type feedback + inline caches)
- *   tier 2: baseline JIT          (per-bytecode native emission)
- *   tier 3: optimizing JIT        (feedback-specialized, OSR + deopt)
- *
- * The interpreter is always the semantic fallback: a compile failure or an
- * unexpected guard failure deopts back into QuickJS with identical results.
- */
+/* Public API for the Flame JIT. The interpreter is the semantic fallback. */
 #ifndef SQUARE_FLAME_H
 #define SQUARE_FLAME_H
 

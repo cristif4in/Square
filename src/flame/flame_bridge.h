@@ -1,14 +1,4 @@
-/*
- * Flame — QuickJS bridge (included by quickjs.c near the top).
- *
- * Declares the hook entry points that quickjs.c calls while interpreting.
- * The implementations live in the Flame sources, which quickjs.c includes
- * at the bottom of the file (flame_all.h), so they see every internal
- * struct and helper without any ABI duplication.
- *
- * All hooks early-return on inactive state, so the interpreter cost when
- * Flame is disabled is one predictable branch per hook site.
- */
+/* Hook declarations included by quickjs.c; implementations live in src/flame/. */
 #ifndef SQUARE_FLAME_BRIDGE_H
 #define SQUARE_FLAME_BRIDGE_H
 

@@ -26,9 +26,6 @@ static int flame_no_hooks_env(void)
     return noh;
 }
 
-/* ------------------------------------------------------------------ */
-/* Kind classification                                                 */
-/* ------------------------------------------------------------------ */
 
 FlameKind flame_kind_of(JSValueConst v)
 {
@@ -78,9 +75,6 @@ static void fb_nibble(uint8_t *byte, int shift, FlameKind k)
     *byte = (uint8_t)((*byte & ~(0xFu << shift)) | (nv << shift));
 }
 
-/* ------------------------------------------------------------------ */
-/* Profile lifecycle                                                   */
-/* ------------------------------------------------------------------ */
 
 /* Build a human-readable function label (atom name or NULL). Caller frees. */
 static char *flame_fn_label(JSContext *ctx, JSFunctionBytecode *b)
@@ -139,9 +133,6 @@ void flame_free_profile(JSRuntime *rt, void *profv)
     js_free_rt(rt, prof);
 }
 
-/* ------------------------------------------------------------------ */
-/* Side-table lookup (linear; site counts are small in practice)       */
-/* ------------------------------------------------------------------ */
 
 static FlameCallSite *flame_find_call(JSContext *ctx, FlameProfile *prof,
                                       uint32_t pc_off)
@@ -186,9 +177,6 @@ static FlameLoop *flame_find_loop(JSContext *ctx, FlameProfile *prof,
     return &prof->loops[prof->loop_count++];
 }
 
-/* ------------------------------------------------------------------ */
-/* Hook implementations (called from the interpreter)                  */
-/* ------------------------------------------------------------------ */
 
 void flame_hook_function_entry(JSContext *ctx, JSObject *p,
                                JSFunctionBytecode *b)
@@ -245,6 +233,8 @@ int flame_hook_loop_backedge(JSFunctionBytecode *b, uint32_t pc_off,
     /* OSR: transfer this interpreted activation into compiled code at the
      * loop header, once per threshold crossing */
     if ((loop->count % FLAME_HOT_LOOP_THRESHOLD) != 0)
+        return 0;
+    if (getenv("FLAME_NO_OSR"))
         return 0;
     cf = (FlameCompiledFunc *)b->flame_compiled;
     if (!cf || cf->tier != 2)

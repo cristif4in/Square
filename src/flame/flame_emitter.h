@@ -1,17 +1,4 @@
-/*
- * Flame — machine emitter abstraction.
- *
- * A deliberately small virtual ISA: exactly what the baseline/optimizing
- * tiers need (value-stack traffic, tag tests, int fast paths, helper calls
- * and branch patching). Two backends implement it:
- *   emitter_x64.c    — x86_64, SysV and Windows ABIs
- *   emitter_arm64.c  — aarch64 (Apple/Win/Linux)
- *
- * Helpers are always called as `void (*)(FlameJitState *)` — a single
- * pointer argument — which keeps the call sites identical under both x64
- * ABIs and trivially portable to ARM64. Per-site constants travel through
- * the state's `param` field.
- */
+/* Machine emitter abstraction: the virtual ISA the Flame tiers emit against. */
 #ifndef SQUARE_FLAME_EMITTER_H
 #define SQUARE_FLAME_EMITTER_H
 

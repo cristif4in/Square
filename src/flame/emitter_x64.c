@@ -95,9 +95,6 @@ static void fl_modrm(FlameEmitter *e, int reg, int base, int32_t disp)
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* Labels                                                              */
-/* ------------------------------------------------------------------ */
 
 void fl_init(FlameEmitter *e, void *buf, size_t cap)
 {
@@ -187,9 +184,6 @@ void fl_finish(FlameEmitter *e)
     fl_resolve(e);
 }
 
-/* ------------------------------------------------------------------ */
-/* Moves / memory                                                      */
-/* ------------------------------------------------------------------ */
 
 void fl_mov_rr(FlameEmitter *e, FlReg dst, FlReg src)
 {
@@ -269,9 +263,6 @@ void fl_lea_rm(FlameEmitter *e, FlReg dst, FlReg base, int32_t disp)
     fl_modrm(e, r, fl_reg_x64[base], disp);
 }
 
-/* ------------------------------------------------------------------ */
-/* Arithmetic / compare                                                */
-/* ------------------------------------------------------------------ */
 
 void fl_add_rr(FlameEmitter *e, FlReg dst, FlReg src)
 {
@@ -433,9 +424,6 @@ void fl_cv64_32(FlameEmitter *e, FlReg dst, FlReg src)
     fl_emit8(e, (uint8_t)(0xC0 | ((d & 7) << 3) | (s & 7)));
 }
 
-/* ------------------------------------------------------------------ */
-/* Control flow / calls                                                */
-/* ------------------------------------------------------------------ */
 
 void fl_call(FlameEmitter *e, void *func, FlReg argreg)
 {
@@ -470,12 +458,6 @@ void fl_ret(FlameEmitter *e)
     fl_emit8(e, 0xC3);
 }
 
-/* ------------------------------------------------------------------ */
-/* SSE2 double math (baseline float fast paths)                        */
-/*                                                                     */
-/* Encoding: legacy prefixes (66/F2) come first, then a REX-like byte  */
-/* (0x40 | R<<2 | B) for xmm/base registers >= 8, then opcode/modrm.   */
-/* ------------------------------------------------------------------ */
 
 /* prefix bytes + REX for a reg-reg xmm op */
 static void fl_fprefix_rr(FlameEmitter *e, uint8_t pfx, int rd, int rs)
