@@ -1,6 +1,7 @@
 # Square Browser Engine
 
 [![build](https://github.com/cristif4in/Square/actions/workflows/build.yml/badge.svg)](https://github.com/cristif4in/Square/actions/workflows/build.yml)
+[![forthebadge](/badges/built-with-swag.svg)](https://forthebadge.com)
 
 Square is a from-scratch browser engine written in C++17. It ships as a shared
 library (`libsquare.so` on Linux, `square.dll` on Windows).

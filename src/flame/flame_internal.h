@@ -208,6 +208,9 @@ void flame_baseline_maybe_compile(struct JSContext *ctx,
                                   struct JSFunctionBytecode *b);
 void flame_opt_maybe_compile(struct JSContext *ctx,
                              struct JSFunctionBytecode *b);
+void flame_opt_compile(struct JSContext *ctx, struct JSFunctionBytecode *b);
+int flame_osr_run(struct JSContext *ctx, struct JSFunctionBytecode *b,
+                  struct FlameOsrEntry *oe, JSValue *sp, JSValue *out);
 
 
 struct JSRuntime;
