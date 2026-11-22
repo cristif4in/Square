@@ -148,6 +148,12 @@ extern uint64_t flame_stat_compiles, flame_stat_compile_fails;
 extern uint64_t flame_stat_jit_calls, flame_stat_deopts, flame_stat_osr;
 extern uint64_t flame_stat_native_bytes;
 
+/* OSR entry stub per loop header. */
+typedef struct FlameOsrEntry {
+    uint32_t bc_off;
+    void *entry;                  /* int (*)(FlameJitState*) */
+} FlameOsrEntry;
+
 /* A compiled function: native code + backlink, registered in the
  * per-runtime code cache. */
 typedef struct FlameCompiledFunc {
@@ -155,21 +161,13 @@ typedef struct FlameCompiledFunc {
     struct JSFunctionBytecode *b; /* backlink (not owned) */
     uint8_t *code;                /* inside an exec block */
     size_t code_size;
-    struct {                      /* OSR entry stub per loop header */
-        uint32_t bc_off;
-        void *entry;              /* int (*)(FlameJitState*) */
-    } osr[8];
+    FlameOsrEntry osr[8];         /* OSR entry stub per loop header */
     int osr_count;
     uint8_t tier;                 /* 2 = baseline, 3 = optimizing */
 } FlameCompiledFunc;
 
 /* Optimizing-tier entry stored alongside the baseline one. */
 #define FLAME_EXIT_DEOPT 3      /* FlameJitState.exit_kind: guard failure */
-
-typedef struct FlameOsrEntry {
-    uint32_t bc_off;
-    void *entry;
-} FlameOsrEntry;
 
 /* Executable memory (VirtualAlloc / mmap). */
 void *flame_exec_alloc(size_t size);
