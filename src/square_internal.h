@@ -571,6 +571,7 @@ struct HttpHeader { std::string name, value; };
 struct HttpResult {
   bool ok = false;                       /* transport-level success */
   int status = 0;
+  bool http11 = false;                   /* peer replied HTTP/1.1 (keep-alive default) */
   std::vector<HttpHeader> headers;
   std::vector<uint8_t> body;             /* decoded (gunzipped) body */
   std::string final_url;

@@ -496,6 +496,7 @@ static bool read_http_response(StreamOps& io, HttpResult* res, const std::atomic
   size_t line_end = buf.find("\r\n");
   std::string status_line = buf.substr(0, line_end);
   if (status_line.rfind("HTTP/", 0) != 0) { res->err = "bad status line: " + status_line.substr(0, 40); return false; }
+  res->http11 = status_line.rfind("HTTP/1.1", 0) == 0;
   size_t sp1 = status_line.find(' ');
   res->status = sp1 == std::string::npos ? 0 : atoi(status_line.c_str() + sp1 + 1);
   /* headers */
@@ -1167,6 +1168,106 @@ done:
 #endif /* !_WIN32 */
 
 
+/* --- HTTP/1.1 keep-alive connection pool ---
+ * Every request used to open a fresh TCP+TLS connection ("Connection:
+ * close"), so asset-heavy pages paid a full TCP+TLS handshake per file,
+ * which dominated load time. Responses with framing (Content-Length or
+ * chunked) leave the socket aligned for the next request, so those
+ * connections go back into this small pool. Read-to-EOF responses and
+ * HTTP/2 sessions are never pooled. */
+struct PooledConn {
+  std::string key;     /* scheme://host:port */
+  int fd = -1;         /* raw socket (owned) */
+  int kind = 0;        /* 0 plain, 1 OpenSSL TlsSession, 2 SchannelStream */
+  void* tls = nullptr; /* owned when kind != 0 */
+};
+static std::mutex g_pool_mtx;
+static std::vector<PooledConn> g_conn_pool;
+
+static void conn_close(PooledConn* c) {
+  if (c->kind == 1) delete (TlsSession*)c->tls;
+#ifdef _WIN32
+  else if (c->kind == 2) delete (SchannelStream*)c->tls;
+#endif
+  if (c->fd >= 0) {
+#ifdef _WIN32
+    closesocket((SOCKET)c->fd);
+#else
+    ::close(c->fd);
+#endif
+  }
+  c->fd = -1;
+  c->tls = nullptr;
+  c->kind = 0;
+  c->key.clear();
+}
+
+static void pool_put(PooledConn* c) {
+  std::lock_guard<std::mutex> lk(g_pool_mtx);
+  if (c->fd < 0 || g_conn_pool.size() >= 16) { conn_close(c); return; }
+  g_conn_pool.push_back(PooledConn());
+  g_conn_pool.back().key = std::move(c->key);
+  g_conn_pool.back().fd = c->fd; c->fd = -1;
+  g_conn_pool.back().kind = c->kind; c->kind = 0;
+  g_conn_pool.back().tls = c->tls; c->tls = nullptr;
+}
+
+static bool pool_take(const std::string& key, PooledConn* out) {
+  std::lock_guard<std::mutex> lk(g_pool_mtx);
+  for (size_t i = 0; i < g_conn_pool.size(); i++) {
+    if (g_conn_pool[i].key != key) continue;
+    PooledConn c;
+    c.key = std::move(g_conn_pool[i].key);
+    c.fd = g_conn_pool[i].fd; g_conn_pool[i].fd = -1;
+    c.kind = g_conn_pool[i].kind; g_conn_pool[i].kind = 0;
+    c.tls = g_conn_pool[i].tls; g_conn_pool[i].tls = nullptr;
+    g_conn_pool.erase(g_conn_pool.begin() + (long)i);
+    /* stale check: anything readable before we write means the peer closed
+     * the connection (FIN / close_notify) or left data we can't trust */
+    if (c.fd >= 0) {
+      bool dead = false;
+#ifdef _WIN32
+      fd_set rset;
+      FD_ZERO(&rset);
+      FD_SET((SOCKET)c.fd, &rset);
+      struct timeval tv;
+      tv.tv_sec = 0;
+      tv.tv_usec = 0;
+      if (select((int)c.fd + 1, &rset, nullptr, nullptr, &tv) > 0) {
+        char b;
+        dead = recv((SOCKET)c.fd, &b, 1, MSG_PEEK) <= 0;
+      }
+#else
+      struct pollfd pfd;
+      pfd.fd = c.fd;
+      pfd.events = POLLIN;
+      if (poll(&pfd, 1, 0) > 0) {
+        char b;
+        ssize_t r = recv(c.fd, &b, 1, MSG_PEEK);
+        dead = r <= 0;
+      }
+#endif
+      if (dead) { conn_close(&c); continue; }
+      *out = std::move(c);
+      return true;
+    }
+    conn_close(&c);
+  }
+  return false;
+}
+
+/* A response can hand its connection back to the pool only when the body
+ * was framed (so the stream is aligned) and the peer allows keep-alive. */
+static bool conn_reusable(const HttpResult& r) {
+  if (!r.http11) return false;
+  std::string te = r.header("Transfer-Encoding");
+  bool framed = (!te.empty() && lower_copy(te).find("chunked") != std::string::npos) ||
+                !r.header("Content-Length").empty();
+  if (!framed) return false;
+  return lower_copy(r.header("Connection")).find("close") == std::string::npos;
+}
+
+
 HttpResult net_http_get(const std::string& url, const std::vector<HttpHeader>& extra_headers,
                         const std::string& method, int timeout_ms, CookieJar* jar,
                         const std::atomic<bool>* cancel) {
@@ -1199,7 +1300,7 @@ HttpResult net_http_get(const std::string& url, const std::vector<HttpHeader>& e
     if (!have_ua) req += "User-Agent: " + ua + "\r\n";
     if (!have_accept) req += "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8\r\n";
     if (!have_ae) req += "Accept-Encoding: gzip, deflate\r\n";
-    if (!have_conn) req += "Connection: close\r\n";
+    if (!have_conn) req += "Connection: keep-alive\r\n";
     req += "Upgrade-Insecure-Requests: 1\r\n";
     if (jar) {
       std::string ck = jar->get(host);
@@ -1213,6 +1314,38 @@ HttpResult net_http_get(const std::string& url, const std::vector<HttpHeader>& e
 
 #ifndef _WIN32
     if (is_tls) {
+      const std::string ckey = "https://" + host + ":" + port;
+      /* attempt 0: reuse a pooled HTTP/1.1 TLS session (skips the TCP+TLS
+       * handshake entirely). h2 sessions are never pooled (single stream),
+       * so a pooled conn is always spoken to over HTTP/1.1. */
+      PooledConn pc;
+      if (pool_take(ckey, &pc)) {
+        TlsSession* t = (TlsSession*)pc.tls;
+        StreamOps io;
+        io.read = [t](char* d, size_t n) { return tls_read(d, n, t); };
+        io.write = [t](const char* d, size_t n) { return tls_write(d, n, t); };
+        HttpResult res;
+        if (io.write(req.data(), req.size()) && read_http_response(io, &res, cancel)) {
+          if (conn_reusable(res)) pool_put(&pc);
+          else conn_close(&pc);
+          std::string loc = res.header("Location");
+          if ((res.status >= 301 && res.status <= 303) || res.status == 307 || res.status == 308) {
+            if (!loc.empty()) { current = url_resolve(current, loc); continue; }
+          }
+          if (jar) {
+            std::string hs = host;
+            for (auto& h : res.headers) if (ieq(h.name, "Set-Cookie")) jar->store(hs, h.value);
+          }
+          res.ok = true;
+          res.final_url = current;
+          return res;
+        }
+        /* stale pooled conn (peer closed after our liveness check):
+         * drop it and fall through to a fresh connection */
+        conn_close(&pc);
+        if (cancel && cancel->load()) { out.err = "cancelled"; return out; }
+      }
+
       TlsSession* tls = nullptr;
       bool h2_ok_flag = false;
       if (!https_session(sock, host, timeout_ms, &tls, &out.err, &h2_ok_flag)) return out;
@@ -1246,6 +1379,8 @@ HttpResult net_http_get(const std::string& url, const std::vector<HttpHeader>& e
             fprintf(stderr, "[h2] fallback 1.1: okrd=%d status=%d size=%zu err='%s'\n",
                     (int)okrd, res.status, res.body.size(), res.err.c_str());
           if (!okrd) { out = res; return out; }
+          /* fallback conn: not pooled (session already torn down), the
+           * TcpSocket owns the socket as before */
         } else {
           delete tls;
           okrd = true;
@@ -1256,8 +1391,22 @@ HttpResult net_http_get(const std::string& url, const std::vector<HttpHeader>& e
         io.write = [tls](const char* d, size_t n) { return tls_write(d, n, tls); };
         if (!io.write(req.data(), req.size())) { out.err = "send failed"; delete tls; return out; }
         okrd = read_http_response(io, &res, cancel);
-        delete tls;
-        if (!okrd) { out = res; return out; }
+        /* the session's socket is owned by `sock` (closed on scope exit) */
+        if (!okrd) { delete tls; out = res; return out; }
+        /* h1.1 session: hand it to the pool when the server allows keep-alive */
+        if (conn_reusable(res)) {
+          PooledConn fpc;
+          fpc.key = ckey;
+          fpc.fd = sock.fd;
+          sock.fd = -1; /* ownership moved to the pool */
+          fpc.kind = 1;
+          fpc.tls = tls; /* pool owns the session now */
+          tls = nullptr;
+          pool_put(&fpc);
+        } else {
+          delete tls;
+          tls = nullptr;
+        }
       }
       std::string loc = res.header("Location");
       if ((res.status >= 301 && res.status <= 303) || res.status == 307 || res.status == 308) {
@@ -1273,6 +1422,34 @@ HttpResult net_http_get(const std::string& url, const std::vector<HttpHeader>& e
     }
 #else
     if (is_tls) {
+      const std::string ckey = "https://" + host + ":" + port;
+      /* attempt 0: reuse a pooled Schannel session (skips the TCP+TLS
+       * handshake entirely) */
+      PooledConn pc;
+      if (pool_take(ckey, &pc)) {
+        SchannelStream* t = (SchannelStream*)pc.tls;
+        StreamOps io;
+        io.read = [t](char* d, size_t n) { return t->read(d, n); };
+        io.write = [t](const char* d, size_t n) { return t->write(d, n); };
+        HttpResult res;
+        if (io.write(req.data(), req.size()) && read_http_response(io, &res, cancel)) {
+          if (conn_reusable(res)) pool_put(&pc);
+          else conn_close(&pc);
+          std::string loc = res.header("Location");
+          if ((res.status >= 301 && res.status <= 303) || res.status == 307 || res.status == 308) {
+            if (!loc.empty()) { current = url_resolve(current, loc); continue; }
+          }
+          if (jar) for (auto& h : res.headers) if (ieq(h.name, "Set-Cookie")) jar->store(host, h.value);
+          res.ok = true;
+          res.final_url = current;
+          return res;
+        }
+        /* stale pooled conn (peer closed after our liveness check):
+         * drop it and fall through to a fresh connection */
+        conn_close(&pc);
+        if (cancel && cancel->load()) { out.err = "cancelled"; return out; }
+      }
+
       SchannelStream* tls = new SchannelStream();
       tls->sock = sock.fd;
       if (!tls->init(host, &out.err)) { delete tls; return out; }
@@ -1282,8 +1459,20 @@ HttpResult net_http_get(const std::string& url, const std::vector<HttpHeader>& e
       if (!io.write(req.data(), req.size())) { out.err = "send failed: " + tls->last_err; delete tls; return out; }
       HttpResult res;
       bool okrd = read_http_response(io, &res, cancel);
-      delete tls;
-      if (!okrd) { out = res; return out; }
+      if (!okrd) { delete tls; out = res; return out; }
+      /* h1.1 session: hand it to the pool when the server allows keep-alive;
+       * the session object keeps using the socket, ownership moves with it */
+      if (conn_reusable(res)) {
+        PooledConn fpc;
+        fpc.key = ckey;
+        fpc.fd = sock.fd;
+        sock.fd = -1; /* ownership moved to the pool */
+        fpc.kind = 2;
+        fpc.tls = tls;
+        pool_put(&fpc);
+      } else {
+        delete tls;
+      }
       std::string loc = res.header("Location");
       if ((res.status >= 301 && res.status <= 303) || res.status == 307 || res.status == 308) {
         if (!loc.empty()) { current = url_resolve(current, loc); continue; }
@@ -1295,34 +1484,68 @@ HttpResult net_http_get(const std::string& url, const std::vector<HttpHeader>& e
     }
 #endif
 
-    /* plain HTTP */
-    if (!send_all(sock.fd, req.data(), req.size())) { out.err = "send failed"; return out; }
-    StreamOps io;
-    io.read = [fd = sock.fd](char* d, size_t n) {
+    /* plain HTTP (keep-alive pooled) */
+    {
+      const std::string ckey = "http://" + host + ":" + port;
+      PooledConn pc;
+      /* attempt 0: pooled connection (fails fast if it went stale);
+       * attempt 1: fresh connection */
+      for (int attempt = 0; attempt < 2; attempt++) {
+        bool reused = attempt == 0 && pool_take(ckey, &pc);
+        if (!reused) {
+          pc = PooledConn();
+          pc.key = ckey;
+          pc.fd = tcp_connect_timeout(host, port, timeout_ms, &out.err);
+          if (pc.fd < 0) return out;
+        }
+        int fd = pc.fd;
+        StreamOps io;
+        io.read = [fd](char* d, size_t n) {
 #ifdef _WIN32
-      /* select-based read timeout (SO_RCVTIMEO unreliable on some systems) */
-      fd_set rset;
-      FD_ZERO(&rset);
-      FD_SET((SOCKET)fd, &rset);
-      struct timeval tv;
-      tv.tv_sec = 30;
-      tv.tv_usec = 0;
-      if (select(fd + 1, &rset, nullptr, nullptr, &tv) <= 0) return -1;
+          /* select-based read timeout (SO_RCVTIMEO unreliable on some systems) */
+          fd_set rset;
+          FD_ZERO(&rset);
+          FD_SET((SOCKET)fd, &rset);
+          struct timeval tv;
+          tv.tv_sec = 30;
+          tv.tv_usec = 0;
+          if (select((int)fd + 1, &rset, nullptr, nullptr, &tv) <= 0) return -1;
 #endif
-      ssize_t r = recv(fd, d, n, 0);
-      return (int)r;
-    };
-    io.write = [](const char*, size_t) { return true; };
-    HttpResult res;
-    if (!read_http_response(io, &res, cancel)) { out = res; return out; }
-    std::string loc = res.header("Location");
-    if ((res.status >= 301 && res.status <= 303) || res.status == 307 || res.status == 308) {
-      if (!loc.empty()) { current = url_resolve(current, loc); continue; }
+          ssize_t r = recv(fd, d, n, 0);
+          return (int)r;
+        };
+        io.write = [fd](const char* d, size_t n) { return send_all(fd, d, n); };
+        if (!io.write(req.data(), req.size())) {
+          conn_close(&pc);
+          if (reused) continue; /* stale pooled conn: retry fresh */
+          out.err = "send failed";
+          return out;
+        }
+        HttpResult res;
+        if (!read_http_response(io, &res, cancel)) {
+          conn_close(&pc);
+          if (reused) continue; /* stale pooled conn: retry fresh */
+          out = res;
+          return out;
+        }
+        if (conn_reusable(res)) pool_put(&pc);
+        else conn_close(&pc);
+        std::string loc = res.header("Location");
+        if ((res.status >= 301 && res.status <= 303) || res.status == 307 || res.status == 308) {
+          if (!loc.empty()) {
+            current = url_resolve(current, loc);
+            goto next_hop; /* continue the redirect hop loop, not this attempt loop */
+          }
+        }
+        if (jar) for (auto& h : res.headers) if (ieq(h.name, "Set-Cookie")) jar->store(host, h.value);
+        res.ok = true;
+        res.final_url = current;
+        return res;
+      }
+      out.err = "pooled connection kept failing";
+      return out;
     }
-    if (jar) for (auto& h : res.headers) if (ieq(h.name, "Set-Cookie")) jar->store(host, h.value);
-    res.ok = true;
-    res.final_url = current;
-    return res;
+  next_hop:;
   }
   out.err = "too many redirects";
   return out;

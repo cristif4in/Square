@@ -543,7 +543,9 @@ HttpResult fetch_sync(Instance* inst, const std::string& url, const char* dest) 
    * HTML document starts with one and that caused 4x retries on success. */
   auto looks_blocked = [](const HttpResult& rr) {
     if (!rr.ok) return false;
-    if (rr.status == 403 || rr.status == 429 || rr.status == 503) return true;
+    /* 403 is permanent (e.g. Cloudflare's /cdn-cgi/rum beacon): retrying it
+     * just burns seconds of sleep per resource. 429/503 are transient. */
+    if (rr.status == 429 || rr.status == 503) return true;
     if (rr.body.size() < 12) return false;
     std::string body(rr.body.begin(), rr.body.begin() + std::min(rr.body.size(), (size_t)4000));
     std::string blc = plat_lc(body);
